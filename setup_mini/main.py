@@ -445,10 +445,70 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
+OPTIONS = [
+    ("ollama",    "Ollama          LLM serving daemon"),
+    ("llamacpp",  "llama.cpp       Metal-accelerated inference"),
+    ("mlx",       "MLX             Apple Silicon inference + fine-tuning"),
+    ("open_webui","Open WebUI      browser chat interface"),
+    ("tailscale", "Tailscale       remote access outside LAN"),
+    ("headless_sleep",   "Disable sleep   keep Mini awake for SSH"),
+    ("headless_restart", "Auto-restart    boot after power loss"),
+]
+
+# system and ssh are always included — they're prerequisites
+
+
+def ask_options() -> dict:
+    """Interactive chooser. Returns config overrides."""
+    print()
+    print("  \033[1mWhat to install:\033[0m")
+    print()
+
+    defaults = {
+        "ollama": True,
+        "llamacpp": True,
+        "mlx": True,
+        "open_webui": True,
+        "tailscale": False,
+        "headless_sleep": True,
+        "headless_restart": False,
+    }
+
+    choices = {}
+    for key, label in OPTIONS:
+        default = defaults[key]
+        hint = "Y/n" if default else "y/N"
+        try:
+            answer = input(f"    [{hint}]  {label}  ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  aborted.")
+            sys.exit(0)
+
+        if answer == "":
+            choices[key] = default
+        else:
+            choices[key] = answer in ("y", "yes")
+
+    return choices
+
+
+def apply_choices(cfg: dict, choices: dict) -> dict:
+    """Override config.yaml with interactive choices."""
+    cfg.setdefault("ollama", {})["install"] = choices.get("ollama", False)
+    cfg.setdefault("llamacpp", {})["install"] = choices.get("llamacpp", False)
+    cfg.setdefault("mlx", {})["install"] = choices.get("mlx", False)
+    cfg.setdefault("open_webui", {})["install"] = choices.get("open_webui", False)
+    cfg.setdefault("tailscale", {})["install"] = choices.get("tailscale", False)
+    cfg.setdefault("headless", {})["disable_sleep"] = choices.get("headless_sleep", False)
+    cfg.setdefault("headless", {})["auto_restart_on_power_loss"] = choices.get("headless_restart", False)
+    return cfg
+
+
 def main():
     parser = argparse.ArgumentParser(description="mini-llm setup")
     parser.add_argument("--check", action="store_true", help="only check, don't install")
     parser.add_argument("--phase", type=str, help="run single phase")
+    parser.add_argument("--yes", "-y", action="store_true", help="skip chooser, use config.yaml defaults")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -456,6 +516,12 @@ def main():
     print()
     print("  \033[1mmini-llm setup\033[0m")
     print("  " + "─" * 48)
+
+    # interactive chooser (skip with --yes, --check, or --phase)
+    if not args.yes and not args.check and not args.phase:
+        choices = ask_options()
+        cfg = apply_choices(cfg, choices)
+        print()
 
     # filter phases if --phase specified
     phases = PHASES
