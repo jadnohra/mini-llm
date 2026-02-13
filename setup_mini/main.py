@@ -127,8 +127,11 @@ def apply_system(items: list[dict]):
 def check_ssh(cfg: dict) -> list[dict]:
     items = []
 
-    # remote login enabled
-    ok = run_ok("sudo systemsetup -getremotelogin 2>/dev/null | grep -qi 'on'")
+    # remote login enabled — check if sshd is running (no sudo needed)
+    ok = run_ok("launchctl list | grep -q com.openssh.sshd")
+    if not ok:
+        # fallback: check if port 22 is listening
+        ok = run_ok("nc -z localhost 22 2>/dev/null")
     items.append({"name": "Remote Login (SSH)", "ok": ok, "action": "enable_ssh"})
 
     return items
@@ -152,13 +155,13 @@ def check_headless(cfg: dict) -> list[dict]:
     hcfg = cfg.get("headless", {})
 
     if hcfg.get("disable_sleep", False):
-        # check if sleep is disabled (sleep = 0 means never)
-        r = run("sudo pmset -g | grep -E '^ sleep' || true", check=False)
+        # pmset -g works without sudo for reading
+        r = run("pmset -g | grep -E '^ sleep' || true", check=False)
         ok = "0" in r.stdout if r.stdout else False
         items.append({"name": "Sleep disabled", "ok": ok, "action": "disable_sleep"})
 
     if hcfg.get("auto_restart_on_power_loss", False):
-        r = run("sudo pmset -g | grep -i autorestart || true", check=False)
+        r = run("pmset -g | grep -i autorestart || true", check=False)
         ok = "1" in r.stdout if r.stdout else False
         items.append({"name": "Auto-restart on power loss", "ok": ok, "action": "auto_restart"})
 
