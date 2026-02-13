@@ -446,50 +446,89 @@ def load_config() -> dict:
 
 
 OPTIONS = [
-    ("ollama",    "Ollama          LLM serving daemon"),
-    ("llamacpp",  "llama.cpp       Metal-accelerated inference"),
-    ("mlx",       "MLX             Apple Silicon inference + fine-tuning"),
-    ("open_webui","Open WebUI      browser chat interface"),
-    ("tailscale", "Tailscale       remote access outside LAN"),
-    ("headless_sleep",   "Disable sleep   keep Mini awake for SSH"),
-    ("headless_restart", "Auto-restart    boot after power loss"),
+    ("ollama",           "Ollama",      "LLM serving daemon",                True),
+    ("llamacpp",         "llama.cpp",   "Metal-accelerated inference",       True),
+    ("mlx",              "MLX",         "Apple Silicon inference",           True),
+    ("open_webui",       "Open WebUI",  "browser chat interface",            True),
+    ("tailscale",        "Tailscale",   "remote access outside LAN",         False),
+    ("headless_sleep",   "No sleep",    "keep Mini awake for SSH",           True),
+    ("headless_restart", "Auto-restart","boot after power loss",             False),
 ]
 
 # system and ssh are always included — they're prerequisites
 
 
 def ask_options() -> dict:
-    """Interactive chooser. Returns config overrides."""
-    print()
-    print("  \033[1mWhat to install:\033[0m")
-    print()
+    """Checkbox TUI. Arrow keys to move, space to toggle, enter to confirm."""
+    import tty
+    import termios
 
-    defaults = {
-        "ollama": True,
-        "llamacpp": True,
-        "mlx": True,
-        "open_webui": True,
-        "tailscale": False,
-        "headless_sleep": True,
-        "headless_restart": False,
-    }
+    selected = {key: default for key, _, _, default in OPTIONS}
+    cursor = 0
 
-    choices = {}
-    for key, label in OPTIONS:
-        default = defaults[key]
-        hint = "Y/n" if default else "y/N"
+    def read_key():
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
         try:
-            answer = input(f"    [{hint}]  {label}  ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("\n  aborted.")
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A":
+                        return "up"
+                    elif ch3 == "B":
+                        return "down"
+            elif ch == " ":
+                return "space"
+            elif ch in ("\r", "\n"):
+                return "enter"
+            elif ch == "\x03":  # ctrl-c
+                return "quit"
+            elif ch == "q":
+                return "quit"
+            return None
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    def render():
+        # move cursor up to redraw (except first render)
+        sys.stdout.write(f"\033[{len(OPTIONS) + 4}A")
+        sys.stdout.write("\033[J")  # clear to end of screen
+        draw()
+
+    def draw():
+        print()
+        print("  \033[1mWhat to install:\033[0m  (space: toggle, enter: confirm)")
+        print()
+        for i, (key, name, desc, _) in enumerate(OPTIONS):
+            check = "\033[32mx\033[0m" if selected[key] else " "
+            arrow = "\033[1m>\033[0m" if i == cursor else " "
+            name_styled = f"\033[1m{name}\033[0m" if i == cursor else name
+            print(f"  {arrow} [{check}]  {name_styled:<16} {desc}")
+        print()
+
+    # initial draw
+    draw()
+
+    while True:
+        key = read_key()
+        if key == "up":
+            cursor = (cursor - 1) % len(OPTIONS)
+        elif key == "down":
+            cursor = (cursor + 1) % len(OPTIONS)
+        elif key == "space":
+            opt_key = OPTIONS[cursor][0]
+            selected[opt_key] = not selected[opt_key]
+        elif key == "enter":
+            break
+        elif key == "quit":
+            print("  aborted.")
             sys.exit(0)
+        render()
 
-        if answer == "":
-            choices[key] = default
-        else:
-            choices[key] = answer in ("y", "yes")
-
-    return choices
+    return selected
 
 
 def apply_choices(cfg: dict, choices: dict) -> dict:
