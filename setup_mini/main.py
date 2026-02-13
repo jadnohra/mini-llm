@@ -403,6 +403,10 @@ def check_webui(cfg: dict) -> list[dict]:
     ok = plist.exists() and expected_bin in plist.read_text()
     items.append({"name": "Open WebUI auto-start", "ok": ok, "action": "plist_webui"})
 
+    # check if service is actually running
+    ok = run_ok("launchctl list com.mini.open-webui 2>/dev/null")
+    items.append({"name": "Open WebUI running", "ok": ok, "action": "start_webui"})
+
     return items
 
 
@@ -445,6 +449,10 @@ def apply_webui(items: list[dict]):
 </plist>"""
             plist_path.write_text(plist_content)
             run(f"launchctl unload {plist_path} 2>/dev/null", check=False)
+            run(f"launchctl load {plist_path}", check=False)
+        elif item["action"] == "start_webui":
+            print(f"    loading Open WebUI service...")
+            plist_path = Path.home() / "Library" / "LaunchAgents" / "com.mini.open-webui.plist"
             run(f"launchctl load {plist_path}", check=False)
 
 
