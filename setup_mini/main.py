@@ -475,7 +475,12 @@ def apply_webui(items: list[dict]):
     <string>{home}/Library/Logs/open-webui.err</string>
 </dict>
 </plist>"""
-            run(f"sudo tee {plist_path} > /dev/null << 'PLIST'\n{plist_content}\nPLIST", check=False)
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".plist", delete=False) as tmp:
+                tmp.write(plist_content)
+                tmp_path = tmp.name
+            run(f"sudo cp {tmp_path} {plist_path} && sudo chmod 644 {plist_path}", check=False)
+            os.unlink(tmp_path)
             run(f"sudo launchctl bootout system/com.mini.open-webui 2>/dev/null", check=False)
             run(f"sudo launchctl bootstrap system {plist_path}", capture=False, check=False)
         elif item["action"] == "start_webui":
