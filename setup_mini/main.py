@@ -406,14 +406,14 @@ def check_webui(cfg: dict) -> list[dict]:
     ok = os.path.exists(webui_python) and run_ok(f"uv pip show --python {webui_python} open-webui 2>/dev/null")
     items.append({"name": "Open WebUI installed", "ok": ok, "action": "install_webui"})
 
-    # check if launchd plist exists and points to the venv binary
-    plist = Path.home() / "Library" / "LaunchAgents" / "com.mini.open-webui.plist"
+    # check if launchd daemon plist exists and points to the venv binary
+    plist = Path("/Library/LaunchDaemons/com.mini.open-webui.plist")
     expected_bin = env_bin("webui", "open-webui")
     ok = plist.exists() and expected_bin in plist.read_text()
     items.append({"name": "Open WebUI auto-start", "ok": ok, "action": "plist_webui"})
 
     # check if service is actually running
-    ok = run_ok("launchctl list com.mini.open-webui 2>/dev/null")
+    ok = run_ok("sudo launchctl list com.mini.open-webui 2>/dev/null")
     items.append({"name": "Open WebUI running", "ok": ok, "action": "start_webui"})
 
     return items
@@ -428,17 +428,24 @@ def apply_webui(items: list[dict]):
             ensure_env("webui")
             run(f"uv pip install --python {env_python('webui')} open-webui", capture=False, check=False)
         elif item["action"] == "plist_webui":
-            print(f"    creating auto-start plist...")
-            plist_dir = Path.home() / "Library" / "LaunchAgents"
-            plist_dir.mkdir(parents=True, exist_ok=True)
-            plist_path = plist_dir / "com.mini.open-webui.plist"
+            print(f"    creating auto-start daemon (needs sudo)...")
+            # remove stale LaunchAgent if present
+            old_plist = Path.home() / "Library" / "LaunchAgents" / "com.mini.open-webui.plist"
+            if old_plist.exists():
+                run(f"launchctl unload {old_plist} 2>/dev/null", check=False)
+                old_plist.unlink()
+            plist_path = Path("/Library/LaunchDaemons/com.mini.open-webui.plist")
             port = 8080
+            user = os.environ.get("USER", "root")
+            home = str(Path.home())
             plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.mini.open-webui</string>
+    <key>UserName</key>
+    <string>{user}</string>
     <key>ProgramArguments</key>
     <array>
         <string>{env_bin('webui', 'open-webui')}</string>
@@ -446,22 +453,29 @@ def apply_webui(items: list[dict]):
         <string>--port</string>
         <string>{port}</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>{home}</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{Path.home()}/Library/Logs/open-webui.log</string>
+    <string>{home}/Library/Logs/open-webui.log</string>
     <key>StandardErrorPath</key>
-    <string>{Path.home()}/Library/Logs/open-webui.err</string>
+    <string>{home}/Library/Logs/open-webui.err</string>
 </dict>
 </plist>"""
-            plist_path.write_text(plist_content)
-            launchctl_load("com.mini.open-webui", plist_path)
+            run(f"sudo tee {plist_path} > /dev/null << 'PLIST'\n{plist_content}\nPLIST", check=False)
+            run(f"sudo launchctl bootout system/com.mini.open-webui 2>/dev/null", check=False)
+            run(f"sudo launchctl bootstrap system {plist_path}", capture=False, check=False)
         elif item["action"] == "start_webui":
-            print(f"    loading Open WebUI service...")
-            plist_path = Path.home() / "Library" / "LaunchAgents" / "com.mini.open-webui.plist"
-            launchctl_load("com.mini.open-webui", plist_path)
+            print(f"    starting Open WebUI service...")
+            plist_path = Path("/Library/LaunchDaemons/com.mini.open-webui.plist")
+            run(f"sudo launchctl bootstrap system {plist_path} 2>/dev/null", check=False)
+            run(f"sudo launchctl kickstart system/com.mini.open-webui 2>/dev/null", check=False)
 
 
 # ── Phase: tailscale ───────────────────────────────────
