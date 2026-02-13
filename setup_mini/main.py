@@ -44,6 +44,32 @@ def beep():
         _sound.play()
 
 
+ENVS_DIR = Path.home() / ".mini" / "envs"
+
+
+def env_pip(name: str) -> str:
+    """Return the pip path for a local venv."""
+    return str(ENVS_DIR / name / "bin" / "pip")
+
+
+def env_python(name: str) -> str:
+    """Return the python path for a local venv."""
+    return str(ENVS_DIR / name / "bin" / "python")
+
+
+def env_bin(name: str, cmd: str) -> str:
+    """Return a binary path inside a local venv."""
+    return str(ENVS_DIR / name / "bin" / cmd)
+
+
+def ensure_env(name: str):
+    """Create a venv if it doesn't exist."""
+    venv_dir = ENVS_DIR / name
+    if not venv_dir.exists():
+        ENVS_DIR.mkdir(parents=True, exist_ok=True)
+        run(f"uv venv {venv_dir}", capture=False, check=False)
+
+
 # ── Helpers ─────────────────────────────────────────────
 
 
@@ -129,19 +155,12 @@ def apply_system(items: list[dict]):
             print(f"    installing {item['name']}...")
             run('/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
                 capture=False, check=False)
-            # add brew to path for this session
-            brew_paths = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
-            for bp in brew_paths:
-                if os.path.exists(bp):
-                    result = run(f"{bp} shellenv", check=False)
-                    if result.returncode == 0:
-                        for line in result.stdout.strip().split("\n"):
-                            if line.startswith("export "):
-                                parts = line[7:].split("=", 1)
-                                if len(parts) == 2:
-                                    key = parts[0]
-                                    val = parts[1].strip('"').strip("'")
-                                    os.environ[key] = val
+            # add brew to PATH for this session
+            for brew_dir in ["/opt/homebrew/bin", "/usr/local/bin"]:
+                brew_bin = os.path.join(brew_dir, "brew")
+                if os.path.exists(brew_bin):
+                    os.environ["PATH"] = brew_dir + ":" + os.environ.get("PATH", "")
+                    print(f"    added {brew_dir} to PATH")
                     break
         elif action == "brew_pkg":
             print(f"    installing {item['name']}...")
@@ -328,8 +347,9 @@ def check_mlx(cfg: dict) -> list[dict]:
     if not mcfg.get("install", False):
         return items
 
-    # mlx-lm package
-    ok = run_ok("python3 -c 'import mlx_lm' 2>/dev/null")
+    # mlx-lm in local venv
+    mlx_pip = env_pip("mlx")
+    ok = os.path.exists(mlx_pip) and run_ok(f"{mlx_pip} show mlx-lm 2>/dev/null")
     items.append({"name": "mlx-lm installed", "ok": ok, "action": "install_mlx"})
 
     # models
@@ -351,12 +371,13 @@ def apply_mlx(items: list[dict]):
         if item["ok"]:
             continue
         if item["action"] == "install_mlx":
-            print(f"    installing mlx-lm...")
-            run("pip3 install mlx-lm", capture=False, check=False)
+            print(f"    creating mlx venv + installing mlx-lm...")
+            ensure_env("mlx")
+            run(f"uv pip install --python {env_python('mlx')} mlx-lm", capture=False, check=False)
         elif item["action"] == "download_mlx":
             model = item["model"]
             print(f"    downloading {model}...")
-            run(f'python3 -c "from huggingface_hub import snapshot_download; snapshot_download(\'{model}\')"',
+            run(f'{env_python("mlx")} -c "from huggingface_hub import snapshot_download; snapshot_download(\'{model}\')"',
                 capture=False, check=False)
 
 
@@ -369,7 +390,8 @@ def check_webui(cfg: dict) -> list[dict]:
     if not wcfg.get("install", False):
         return items
 
-    ok = run_ok("pip3 show open-webui 2>/dev/null")
+    webui_pip = env_pip("webui")
+    ok = os.path.exists(webui_pip) and run_ok(f"{webui_pip} show open-webui 2>/dev/null")
     items.append({"name": "Open WebUI installed", "ok": ok, "action": "install_webui"})
 
     # check if launchd plist exists
@@ -385,8 +407,9 @@ def apply_webui(items: list[dict]):
         if item["ok"]:
             continue
         if item["action"] == "install_webui":
-            print(f"    installing Open WebUI... (this takes a few minutes)")
-            run("pip3 install open-webui", capture=False, check=False)
+            print(f"    creating webui venv + installing Open WebUI... (this takes a few minutes)")
+            ensure_env("webui")
+            run(f"uv pip install --python {env_python('webui')} open-webui", capture=False, check=False)
         elif item["action"] == "plist_webui":
             print(f"    creating auto-start plist...")
             plist_dir = Path.home() / "Library" / "LaunchAgents"
@@ -401,8 +424,7 @@ def apply_webui(items: list[dict]):
     <string>com.mini.open-webui</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/env</string>
-        <string>open-webui</string>
+        <string>{env_bin('webui', 'open-webui')}</string>
         <string>serve</string>
         <string>--port</string>
         <string>{port}</string>
