@@ -67,7 +67,7 @@ def ensure_env(name: str):
     venv_dir = ENVS_DIR / name
     if not venv_dir.exists():
         ENVS_DIR.mkdir(parents=True, exist_ok=True)
-        run(f"uv venv {venv_dir}", capture=False, check=False)
+        run(f"uv venv --python 3.12 {venv_dir}", capture=False, check=False)
 
 
 # ── Helpers ─────────────────────────────────────────────
