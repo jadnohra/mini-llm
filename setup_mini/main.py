@@ -18,6 +18,12 @@ from pathlib import Path
 
 import yaml
 
+# Ensure brew is on PATH — uv may not inherit the user's shell profile
+for _brew_dir in ["/opt/homebrew/bin", "/usr/local/bin"]:
+    if os.path.exists(os.path.join(_brew_dir, "brew")) and _brew_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _brew_dir + ":" + os.environ["PATH"]
+        break
+
 # ── Sound ───────────────────────────────────────────────
 
 _sound = None
@@ -438,6 +444,7 @@ def apply_webui(items: list[dict]):
 </dict>
 </plist>"""
             plist_path.write_text(plist_content)
+            run(f"launchctl unload {plist_path} 2>/dev/null", check=False)
             run(f"launchctl load {plist_path}", check=False)
 
 
