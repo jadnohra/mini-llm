@@ -1,0 +1,54 @@
+# mini-llm setup configuration
+# Edit this before running: uv run python -m setup_mini
+
+# ── System ──────────────────────────────────────────────
+system:
+  brew_packages:
+    - cmake
+    - git
+    - wget
+    - jq
+    - htop
+    - tmux
+
+# ── SSH ─────────────────────────────────────────────────
+ssh:
+  harden: true
+  disable_password_auth: true
+
+# ── Headless ────────────────────────────────────────────
+headless:
+  disable_sleep: true
+  wake_on_lan: true
+  auto_restart_on_power_loss: true
+
+# ── Ollama ──────────────────────────────────────────────
+ollama:
+  install: true
+  host: "0.0.0.0"
+  port: 11434
+  models:
+    - qwen2.5-coder:32b
+    - qwen3-coder:30b
+    - deepseek-r1:32b
+    - phi4-mini
+
+# ── llama.cpp ───────────────────────────────────────────
+llamacpp:
+  install: true
+  build_from_source: true
+
+# ── MLX ─────────────────────────────────────────────────
+mlx:
+  install: true
+  models:
+    - mlx-community/Qwen2.5-Coder-32B-Instruct-4bit
+
+# ── Open WebUI ──────────────────────────────────────────
+open_webui:
+  install: true
+  port: 8080
+
+# ── Tailscale (optional) ───────────────────────────────
+tailscale:
+  install: false
