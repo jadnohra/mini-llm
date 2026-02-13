@@ -153,7 +153,7 @@ def apply_system(items: list[dict]):
             run("rm -f /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress", check=False)
         elif action == "brew":
             print(f"    installing {item['name']}...")
-            run('/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+            run('NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
                 capture=False, check=False)
             # add brew to PATH for this session
             for brew_dir in ["/opt/homebrew/bin", "/usr/local/bin"]:
@@ -648,18 +648,6 @@ def main():
     if args.check:
         print("  run without --check to install.")
         print()
-        return
-
-    # confirm
-    print()
-    try:
-        answer = input("  proceed? [Y/n] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\n  aborted.")
-        return
-
-    if answer and answer not in ("y", "yes"):
-        print("  aborted.")
         return
 
     print()
