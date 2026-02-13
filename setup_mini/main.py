@@ -17,6 +17,33 @@ from pathlib import Path
 
 import yaml
 
+# ── Sound ───────────────────────────────────────────────
+
+_sound = None
+
+
+def beep():
+    """Play alert chime via NSSound (non-blocking)."""
+    global _sound
+    try:
+        from AppKit import NSSound
+    except ImportError:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "pyobjc-framework-Cocoa", "-q"],
+            capture_output=True,
+        )
+        try:
+            from AppKit import NSSound
+        except ImportError:
+            return  # give up silently
+    sound_path = str(Path(__file__).parent / "sounds" / "alert.wav")
+    if _sound is None:
+        _sound = NSSound.alloc().initWithContentsOfFile_byReference_(sound_path, True)
+    if _sound:
+        _sound.stop()
+        _sound.play()
+
+
 # ── Helpers ─────────────────────────────────────────────
 
 
@@ -647,4 +674,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n  \033[31mcrashed: {e}\033[0m")
+    finally:
+        beep()
+        time.sleep(1)  # let the sound finish before exit
