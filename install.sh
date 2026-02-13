@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 
 # guard against running from inside a nested mini-llm-main
 case "$PWD" in
-    */mini-llm-main/*/mini-llm-main)
+    */mini-llm-main/mini-llm-main*)
         echo "  ERROR: nested mini-llm-main detected — delete the outer one first."
         exit 1
         ;;
