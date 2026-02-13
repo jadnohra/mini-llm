@@ -4,6 +4,7 @@ mini-llm setup — one command to configure a headless Mac Mini AI server.
 Usage:
     uv run python -m setup_mini              # check + install missing
     uv run python -m setup_mini --check      # only check, don't install
+    uv run python -m setup_mini --test       # smoke-test installed services
     uv run python -m setup_mini --phase X    # run single phase
 """
 
@@ -588,14 +589,78 @@ def apply_choices(cfg: dict, choices: dict) -> dict:
     return cfg
 
 
+def smoke_test(cfg: dict):
+    """Hit each installed service with a real request."""
+    print()
+    print("  \033[1msmoke test\033[0m")
+    print("  " + "─" * 48)
+    print()
+
+    passed = 0
+    failed = 0
+
+    def report(name: str, ok: bool, detail: str = ""):
+        nonlocal passed, failed
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+        mark = "\033[32m  ok\033[0m" if ok else "\033[31m   x\033[0m"
+        suffix = f"  ({detail})" if detail else ""
+        print(f"  {mark}  {name}{suffix}")
+
+    # Ollama — generate one token
+    if cfg.get("ollama", {}).get("install", False):
+        models = cfg["ollama"].get("models", [])
+        model = models[0] if models else "phi4-mini"
+        r = run(
+            f'curl -sf http://localhost:11434/api/generate -d \'{{"model":"{model}","prompt":"hi","stream":false,"options":{{"num_predict":1}}}}\'',
+            check=False,
+        )
+        ok = r.returncode == 0 and r.stdout and "response" in r.stdout
+        report(f"Ollama generate ({model})", ok)
+
+    # llama.cpp — binary runs
+    if cfg.get("llamacpp", {}).get("install", False):
+        ok = run_ok("llama-server --help >/dev/null 2>&1") or run_ok(
+            f"{Path.home()}/bin/llama-server --help >/dev/null 2>&1"
+        )
+        report("llama-server --help", ok)
+
+    # MLX — import mlx_lm
+    if cfg.get("mlx", {}).get("install", False):
+        mlx_py = env_python("mlx")
+        ok = os.path.exists(mlx_py) and run_ok(f'{mlx_py} -c "import mlx_lm" 2>/dev/null')
+        report("import mlx_lm", ok)
+
+    # Open WebUI — HTTP response
+    if cfg.get("open_webui", {}).get("install", False):
+        port = cfg["open_webui"].get("port", 8080)
+        ok = run_ok(f"curl -sf http://localhost:{port}/ >/dev/null 2>&1")
+        report(f"Open WebUI on :{port}", ok)
+
+    print()
+    total = passed + failed
+    if failed == 0:
+        print(f"  \033[32m{passed}/{total} passed.\033[0m")
+    else:
+        print(f"  \033[33m{passed}/{total} passed, {failed} failed.\033[0m")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(description="mini-llm setup")
     parser.add_argument("--check", action="store_true", help="only check, don't install")
+    parser.add_argument("--test", action="store_true", help="smoke-test installed services")
     parser.add_argument("--phase", type=str, help="run single phase")
     parser.add_argument("--yes", "-y", action="store_true", help="skip chooser, use config.yaml defaults")
     args = parser.parse_args()
 
     cfg = load_config()
+
+    if args.test:
+        smoke_test(cfg)
+        return
 
     print()
     print("  \033[1mmini-llm setup\033[0m")

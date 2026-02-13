@@ -54,6 +54,14 @@ cd mini-llm-main && ./install.sh
 
 This scans and reports without modifying anything.
 
+## Smoke-testing
+
+```
+./install.sh --test
+```
+
+This hits each running service with a real request: generates a token via Ollama, imports `mlx_lm`, checks the Open WebUI HTTP endpoint, and verifies `llama-server` runs.
+
 ## Running a single phase
 
 ```
