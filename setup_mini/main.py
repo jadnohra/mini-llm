@@ -83,15 +83,21 @@ def apply_system(items: list[dict]):
             continue
         action = item["action"]
         if action == "xcode":
-            print(f"    installing {item['name']}...")
-            run("xcode-select --install 2>/dev/null || true", check=False)
-            print("    waiting for Xcode CLI tools installer...")
-            print("    (if a dialog appeared, click Install and wait)")
-            # xcode-select --install is async — we wait for it
-            for _ in range(120):
-                if run_ok("xcode-select -p 2>/dev/null"):
-                    break
-                time.sleep(5)
+            print(f"    installing {item['name']} (headless via softwareupdate)...")
+            # create trigger file so softwareupdate finds CLT
+            run("touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress", check=False)
+            # find the CLT package name
+            r = run("softwareupdate -l 2>/dev/null | grep -o '.*Command Line Tools.*' | head -1", check=False)
+            pkg = r.stdout.strip().lstrip("* ").strip() if r.stdout else ""
+            if pkg:
+                print(f"    found: {pkg}")
+                print(f"    installing... (this takes a few minutes)")
+                run(f'softwareupdate -i "{pkg}" --verbose', capture=False, check=False)
+            else:
+                print("    could not find CLT package via softwareupdate.")
+                print("    try: xcode-select --install (requires GUI)")
+            # cleanup trigger
+            run("rm -f /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress", check=False)
         elif action == "brew":
             print(f"    installing {item['name']}...")
             run('/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
