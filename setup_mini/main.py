@@ -98,6 +98,15 @@ def brew_has(pkg: str) -> bool:
     return run_ok(f"brew list {pkg} 2>/dev/null")
 
 
+def launchctl_load(label: str, plist_path):
+    """Load a launchd plist using modern bootstrap (falls back to legacy load)."""
+    uid = os.getuid()
+    run(f"launchctl bootout gui/{uid}/{label} 2>/dev/null", check=False)
+    r = run(f"launchctl bootstrap gui/{uid} {plist_path} 2>/dev/null", check=False)
+    if r.returncode != 0:
+        run(f"launchctl load {plist_path}", check=False)
+
+
 def print_status(ok: bool, msg: str):
     mark = "\033[32mok\033[0m" if ok else "\033[31m x\033[0m"
     print(f"    {mark}  {msg}")
@@ -448,12 +457,11 @@ def apply_webui(items: list[dict]):
 </dict>
 </plist>"""
             plist_path.write_text(plist_content)
-            run(f"launchctl unload {plist_path} 2>/dev/null", check=False)
-            run(f"launchctl load {plist_path}", check=False)
+            launchctl_load("com.mini.open-webui", plist_path)
         elif item["action"] == "start_webui":
             print(f"    loading Open WebUI service...")
             plist_path = Path.home() / "Library" / "LaunchAgents" / "com.mini.open-webui.plist"
-            run(f"launchctl load {plist_path}", check=False)
+            launchctl_load("com.mini.open-webui", plist_path)
 
 
 # ── Phase: tailscale ───────────────────────────────────
@@ -684,6 +692,11 @@ def main():
     parser.add_argument("--phase", type=str, help="run single phase")
     parser.add_argument("--yes", "-y", action="store_true", help="skip chooser, use config.yaml defaults")
     args = parser.parse_args()
+
+    import platform
+    if platform.machine() != "arm64" or platform.system() != "Darwin":
+        print("  \033[31mThis script is for Apple Silicon Macs only.\033[0m")
+        sys.exit(1)
 
     cfg = load_config()
 
