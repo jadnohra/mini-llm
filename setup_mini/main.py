@@ -47,10 +47,6 @@ def beep():
 ENVS_DIR = Path.home() / ".mini" / "envs"
 
 
-def env_pip(name: str) -> str:
-    """Return the pip path for a local venv."""
-    return str(ENVS_DIR / name / "bin" / "pip")
-
 
 def env_python(name: str) -> str:
     """Return the python path for a local venv."""
@@ -348,8 +344,8 @@ def check_mlx(cfg: dict) -> list[dict]:
         return items
 
     # mlx-lm in local venv
-    mlx_pip = env_pip("mlx")
-    ok = os.path.exists(mlx_pip) and run_ok(f"{mlx_pip} show mlx-lm 2>/dev/null")
+    mlx_python = env_python("mlx")
+    ok = os.path.exists(mlx_python) and run_ok(f"uv pip show --python {mlx_python} mlx-lm 2>/dev/null")
     items.append({"name": "mlx-lm installed", "ok": ok, "action": "install_mlx"})
 
     # models
@@ -390,8 +386,8 @@ def check_webui(cfg: dict) -> list[dict]:
     if not wcfg.get("install", False):
         return items
 
-    webui_pip = env_pip("webui")
-    ok = os.path.exists(webui_pip) and run_ok(f"{webui_pip} show open-webui 2>/dev/null")
+    webui_python = env_python("webui")
+    ok = os.path.exists(webui_python) and run_ok(f"uv pip show --python {webui_python} open-webui 2>/dev/null")
     items.append({"name": "Open WebUI installed", "ok": ok, "action": "install_webui"})
 
     # check if launchd plist exists
