@@ -10,5 +10,5 @@ if ! command -v uv &>/dev/null; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# run setup
-uv run python -m setup_mini "$@"
+# run setup (--with installs deps, --no-project skips building a package)
+uv run --with pyyaml --no-project python -m setup_mini "$@"
