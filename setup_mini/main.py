@@ -453,6 +453,8 @@ def apply_webui(items: list[dict]):
         <string>--port</string>
         <string>{port}</string>
     </array>
+    <key>WorkingDirectory</key>
+    <string>{home}</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
