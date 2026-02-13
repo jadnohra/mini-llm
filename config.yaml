@@ -17,10 +17,11 @@ ssh:
   disable_password_auth: true
 
 # ── Headless ────────────────────────────────────────────
+# disable_sleep: prevents the Mini from sleeping so SSH and services
+#   stay available. Without this, a sleeping Mini is unreachable.
 headless:
   disable_sleep: true
-  wake_on_lan: true
-  auto_restart_on_power_loss: true
+  auto_restart_on_power_loss: false
 
 # ── Ollama ──────────────────────────────────────────────
 ollama:
