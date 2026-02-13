@@ -428,6 +428,7 @@ def apply_webui(items: list[dict]):
             ensure_env("webui")
             run(f"uv pip install --python {env_python('webui')} open-webui", capture=False, check=False)
         elif item["action"] == "plist_webui":
+            import secrets
             print(f"    creating auto-start daemon (needs sudo)...")
             # remove stale LaunchAgent if present
             old_plist = Path.home() / "Library" / "LaunchAgents" / "com.mini.open-webui.plist"
@@ -459,6 +460,10 @@ def apply_webui(items: list[dict]):
     <dict>
         <key>HOME</key>
         <string>{home}</string>
+        <key>WEBUI_SECRET_KEY</key>
+        <string>{secrets.token_hex(32)}</string>
+        <key>DATA_DIR</key>
+        <string>{home}/.open-webui</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
