@@ -391,9 +391,10 @@ def check_webui(cfg: dict) -> list[dict]:
     ok = os.path.exists(webui_python) and run_ok(f"uv pip show --python {webui_python} open-webui 2>/dev/null")
     items.append({"name": "Open WebUI installed", "ok": ok, "action": "install_webui"})
 
-    # check if launchd plist exists
+    # check if launchd plist exists and points to the venv binary
     plist = Path.home() / "Library" / "LaunchAgents" / "com.mini.open-webui.plist"
-    ok = plist.exists()
+    expected_bin = env_bin("webui", "open-webui")
+    ok = plist.exists() and expected_bin in plist.read_text()
     items.append({"name": "Open WebUI auto-start", "ok": ok, "action": "plist_webui"})
 
     return items
