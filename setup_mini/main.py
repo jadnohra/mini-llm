@@ -74,10 +74,6 @@ def check_system(cfg: dict) -> list[dict]:
         ok = brew_has(pkg)
         items.append({"name": f"brew: {pkg}", "ok": ok, "action": "brew_pkg", "pkg": pkg})
 
-    # uv
-    ok = has_cmd("uv")
-    items.append({"name": "uv", "ok": ok, "action": "uv"})
-
     return items
 
 
@@ -117,9 +113,6 @@ def apply_system(items: list[dict]):
         elif action == "brew_pkg":
             print(f"    installing {item['name']}...")
             run(f"brew install {item['pkg']}", capture=False, check=False)
-        elif action == "uv":
-            print(f"    installing {item['name']}...")
-            run("curl -LsSf https://astral.sh/uv/install.sh | sh", capture=False, check=False)
 
 
 # ── Phase: ssh ──────────────────────────────────────────
