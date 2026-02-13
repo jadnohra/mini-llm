@@ -599,6 +599,10 @@ def smoke_test(cfg: dict):
     passed = 0
     failed = 0
 
+    def testing(name: str):
+        sys.stdout.write(f"    \033[90mtesting {name}...\033[0m\r")
+        sys.stdout.flush()
+
     def report(name: str, ok: bool, detail: str = ""):
         nonlocal passed, failed
         if ok:
@@ -607,14 +611,15 @@ def smoke_test(cfg: dict):
             failed += 1
         mark = "\033[32m  ok\033[0m" if ok else "\033[31m   x\033[0m"
         suffix = f"  ({detail})" if detail else ""
-        print(f"  {mark}  {name}{suffix}")
+        print(f"\033[2K  {mark}  {name}{suffix}")
 
-    # Ollama — generate one token
+    # Ollama — generate one token (may take a minute to load model)
     if cfg.get("ollama", {}).get("install", False):
         models = cfg["ollama"].get("models", [])
         model = models[0] if models else "phi4-mini"
+        testing(f"Ollama generate — may take a minute loading {model}")
         r = run(
-            f'curl -sf http://localhost:11434/api/generate -d \'{{"model":"{model}","prompt":"hi","stream":false,"options":{{"num_predict":1}}}}\'',
+            f'curl -sf --max-time 120 http://localhost:11434/api/generate -d \'{{"model":"{model}","prompt":"hi","stream":false,"options":{{"num_predict":1}}}}\'',
             check=False,
         )
         ok = r.returncode == 0 and r.stdout and "response" in r.stdout
@@ -622,6 +627,7 @@ def smoke_test(cfg: dict):
 
     # llama.cpp — binary runs
     if cfg.get("llamacpp", {}).get("install", False):
+        testing("llama-server --help")
         ok = run_ok("llama-server --help >/dev/null 2>&1") or run_ok(
             f"{Path.home()}/bin/llama-server --help >/dev/null 2>&1"
         )
@@ -629,6 +635,7 @@ def smoke_test(cfg: dict):
 
     # MLX — import mlx_lm
     if cfg.get("mlx", {}).get("install", False):
+        testing("import mlx_lm")
         mlx_py = env_python("mlx")
         ok = os.path.exists(mlx_py) and run_ok(f'{mlx_py} -c "import mlx_lm" 2>/dev/null')
         report("import mlx_lm", ok)
@@ -636,6 +643,7 @@ def smoke_test(cfg: dict):
     # Open WebUI — HTTP response
     if cfg.get("open_webui", {}).get("install", False):
         port = cfg["open_webui"].get("port", 8080)
+        testing(f"Open WebUI on :{port}")
         ok = run_ok(f"curl -sf http://localhost:{port}/ >/dev/null 2>&1")
         report(f"Open WebUI on :{port}", ok)
 
