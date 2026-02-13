@@ -1,17 +1,6 @@
 # mini-llm
 
-One command to set up a Mac Mini as a headless AI server. Installs and configures everything needed to run LLMs locally over SSH.
-
-## What it installs
-
-- **Xcode CLI tools** — build essentials (headless-safe, no GUI needed)
-- **Homebrew** + core tools (cmake, git, wget, jq, htop, tmux)
-- **Ollama** — LLM serving daemon, bound to all interfaces so other machines can reach it
-- **llama.cpp** — built from source with Metal acceleration
-- **MLX** — Apple's inference framework optimized for Apple Silicon
-- **Open WebUI** — browser-based chat interface, auto-starts on boot
-- **SSH hardening** — enables remote login
-- **Headless config** — disables sleep, auto-restart on power loss
+A single command that turns a Mac Mini into a headless AI server. It installs Ollama, llama.cpp, MLX, and the surrounding tools, configures the machine for headless operation, and pulls the models you choose. The script detects what is already present and installs only what is missing.
 
 ## Install
 
@@ -19,19 +8,53 @@ One command to set up a Mac Mini as a headless AI server. Installs and configure
 curl -sL https://github.com/jadnohra/mini-llm/archive/refs/heads/main.tar.gz | tar xz && cd mini-llm-main && ./install.sh
 ```
 
-That's it. Works on a fresh Mac Mini with nothing installed — only needs bash and curl (which macOS has by default).
+The machine needs nothing beyond bash and curl, both of which ship with macOS. The script bootstraps its own dependencies, starting with uv and continuing through Xcode CLI tools and Homebrew if they are absent.
 
-The script is **idempotent** — run it again anytime and it only installs what's missing.
+An interactive chooser appears on first run. Arrow keys navigate, spacebar toggles, enter confirms.
 
-## Check without installing
+```
+  What to install:  (space: toggle, enter: confirm)
+
+  > [x]  Ollama           LLM serving daemon
+    [x]  llama.cpp        Metal-accelerated inference
+    [x]  MLX              Apple Silicon inference
+    [x]  Open WebUI       browser chat interface
+    [ ]  Tailscale        remote access outside LAN
+    [x]  No sleep         keep Mini awake for SSH
+    [ ]  Auto-restart     boot after power loss
+```
+
+A chime plays when the script finishes, whether it succeeded, failed, or was interrupted.
+
+## What it sets up
+
+**Ollama** runs as a daemon bound to all network interfaces, so other machines on the network can reach it. The script pulls whichever models are listed in `config.yaml`.
+
+**llama.cpp** is built from source with Metal acceleration enabled and linked into `~/bin`. This gives direct control over context size, quantization, sampling parameters, and everything else Ollama abstracts away.
+
+**MLX** is Apple's inference framework, purpose-built for unified memory on Apple Silicon. It tends to run 10-30% faster than llama.cpp on the same hardware.
+
+**Open WebUI** provides a browser-based chat interface. A launchd plist starts it automatically on boot.
+
+**Headless configuration** disables sleep so the machine remains reachable over SSH. Auto-restart after power loss is available but off by default.
+
+## Running again
+
+The script is idempotent. Running it a second time scans everything and touches only what has changed or is newly missing.
+
+```
+cd mini-llm-main && ./install.sh
+```
+
+## Checking without installing
 
 ```
 ./install.sh --check
 ```
 
-Shows what's installed and what's missing, without touching anything.
+This scans and reports without modifying anything.
 
-## Run a single phase
+## Running a single phase
 
 ```
 ./install.sh --phase ollama
@@ -39,9 +62,9 @@ Shows what's installed and what's missing, without touching anything.
 
 Valid phases: `system`, `ssh`, `headless`, `ollama`, `llamacpp`, `mlx`, `webui`, `tailscale`
 
-## Configure
+## Configuration
 
-Edit `config.yaml` before running to choose which models to pull, toggle features on/off, etc.
+`config.yaml` lists which models to pull, which brew packages to install, and which features to enable. Edit it before running, or use the interactive chooser and leave the file as a reference.
 
 ## License
 
