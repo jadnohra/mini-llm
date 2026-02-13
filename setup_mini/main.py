@@ -656,11 +656,16 @@ def smoke_test(cfg: dict):
         ok = os.path.exists(mlx_py) and run_ok(f'{mlx_py} -c "import mlx_lm" 2>/dev/null')
         report("import mlx_lm", ok)
 
-    # Open WebUI — HTTP response
+    # Open WebUI — HTTP response (may need time to start)
     if cfg.get("open_webui", {}).get("install", False):
         port = cfg["open_webui"].get("port", 8080)
-        testing(f"Open WebUI on :{port}")
-        ok = run_ok(f"curl -sf http://localhost:{port}/ >/dev/null 2>&1")
+        testing(f"Open WebUI on :{port} — waiting up to 30s for startup")
+        ok = False
+        for _ in range(15):
+            if run_ok(f"curl -sf --max-time 2 http://localhost:{port}/ >/dev/null 2>&1"):
+                ok = True
+                break
+            time.sleep(2)
         report(f"Open WebUI on :{port}", ok)
 
     print()
