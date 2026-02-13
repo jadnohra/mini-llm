@@ -678,6 +678,3 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"\n  \033[31mcrashed: {e}\033[0m")
-    finally:
-        beep()
-        time.sleep(1)  # let the sound finish before exit

@@ -1,7 +1,23 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 cd "$(dirname "$0")"
+
+SOUND="setup_mini/sounds/alert.wav"
+
+chime() {
+    # try NSSound via python, fall back to afplay
+    python3 -c "
+from AppKit import NSSound
+import time
+s = NSSound.alloc().initWithContentsOfFile_byReference_('$SOUND', True)
+s.play()
+time.sleep(1)
+" 2>/dev/null || afplay "$SOUND" 2>/dev/null || true
+}
+
+trap chime EXIT
+
+set -euo pipefail
 
 # bootstrap uv if missing
 if ! command -v uv &>/dev/null; then
