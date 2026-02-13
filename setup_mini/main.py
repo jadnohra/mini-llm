@@ -224,9 +224,14 @@ def apply_ollama(items: list[dict]):
         elif item["action"] == "start_ollama":
             print(f"    starting Ollama...")
             # set OLLAMA_HOST so it binds to all interfaces
+            os.environ["OLLAMA_HOST"] = "0.0.0.0"
             run("launchctl setenv OLLAMA_HOST 0.0.0.0", check=False)
-            run("brew services start ollama 2>/dev/null || ollama serve &", check=False)
+            # try brew services first, fall back to nohup
+            r = run("brew services start ollama 2>/dev/null", check=False)
+            if r.returncode != 0:
+                run("nohup ollama serve > /tmp/ollama.log 2>&1 &", check=False)
             # wait for it
+            print(f"    waiting for Ollama to start...")
             for _ in range(30):
                 if run_ok("curl -sf http://localhost:11434/api/tags >/dev/null 2>&1"):
                     break
