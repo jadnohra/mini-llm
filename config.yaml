@@ -53,3 +53,11 @@ open_webui:
 # ── Tailscale (optional) ───────────────────────────────
 tailscale:
   install: false
+
+# ── CLI ────────────────────────────────────────────────
+cli:
+  host: mio-mac-mini.local
+  ssh_user: miotrader
+  ollama_port: 11434
+  llamacpp_port: 8081
+  default_model: "qwen2.5-coder:32b"

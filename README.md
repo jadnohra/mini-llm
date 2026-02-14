@@ -74,6 +74,34 @@ Valid phases: `system`, `ssh`, `headless`, `ollama`, `llamacpp`, `mlx`, `webui`,
 
 `config.yaml` lists which models to pull, which brew packages to install, and which features to enable. Edit it before running, or use the interactive chooser and leave the file as a reference.
 
+## CLI
+
+The `mini` command runs on your laptop and talks to the Mac Mini over SSH.
+
+```
+make build        # compile to bin/mini
+make install      # copy to ~/bin
+```
+
+```
+mini status       # services, memory, disk, load
+mini models       # list pulled models
+mini selftest     # 5-step connectivity smoke test
+```
+
+`mini status --json` and `mini models --json` produce machine-readable output.
+
+### CLI configuration
+
+The CLI reads from `config.yaml` (the `cli:` section), `~/.mini/config.yaml`, and environment variables. Environment variables take priority.
+
+| Setting | Env var | Default |
+|---------|---------|---------|
+| host | `MINI_HOST` | `mio-mac-mini.local` |
+| ssh_user | `MINI_SSH_USER` | `miotrader` |
+| ollama_port | `MINI_OLLAMA_PORT` | `11434` |
+| default_model | `MINI_DEFAULT_MODEL` | `qwen2.5-coder:32b` |
+
 ## License
 
 MIT
