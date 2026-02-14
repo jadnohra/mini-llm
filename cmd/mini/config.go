@@ -18,8 +18,8 @@ type Config struct {
 }
 
 var defaultConfig = Config{
-	Host:         "mio-mac-mini.local",
-	SSHUser:      "miotrader",
+	Host:         "mac-mini.local",
+	SSHUser:      currentUser(),
 	OllamaPort:   11434,
 	LlamaCPPPort: 8081,
 	DefaultModel: "qwen2.5-coder:32b",
@@ -104,6 +104,13 @@ func loadEnv(c *Config) {
 	if v := os.Getenv("MINI_DEFAULT_MODEL"); v != "" {
 		c.DefaultModel = v
 	}
+}
+
+func currentUser() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return "user"
 }
 
 // merge overwrites c with non-zero values from src

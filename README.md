@@ -97,8 +97,8 @@ The CLI reads from `config.yaml` (the `cli:` section), `~/.mini/config.yaml`, an
 
 | Setting | Env var | Default |
 |---------|---------|---------|
-| host | `MINI_HOST` | `mio-mac-mini.local` |
-| ssh_user | `MINI_SSH_USER` | `miotrader` |
+| host | `MINI_HOST` | `mac-mini.local` |
+| ssh_user | `MINI_SSH_USER` | (current user) |
 | ollama_port | `MINI_OLLAMA_PORT` | `11434` |
 | default_model | `MINI_DEFAULT_MODEL` | `qwen2.5-coder:32b` |
 
