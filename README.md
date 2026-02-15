@@ -1,4 +1,4 @@
-# mini-llm
+# 🍎🧠 mini-llm
 
 A single command that turns a Mac Mini into a headless AI server. It installs Ollama, llama.cpp, MLX, and the surrounding tools, configures the machine for headless operation, and pulls the models you choose. The script detects what is already present and installs only what is missing.
 
