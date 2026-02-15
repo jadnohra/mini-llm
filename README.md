@@ -88,9 +88,39 @@ mini status       # services, memory, disk, load
 mini models       # list pulled models
 mini selftest     # 5-step connectivity smoke test
 mini ask PROMPT   # single-shot prompt with streaming
+mini chat PROMPT  # multi-turn chat with session memory
+mini sessions     # list chat sessions
 ```
 
 `mini status --json` and `mini models --json` produce machine-readable output.
+
+### mini chat
+
+Multi-turn conversations with session memory. Each session is a directory of plain files.
+
+```
+mini chat "write fibonacci in Go"                 # new session, auto-named
+mini chat capybara-314 "add memoization"           # continue existing session
+mini chat my-project "review this code"            # new session, user-named
+mini chat capybara-314 --history                   # view conversation
+mini chat capybara-314 --tokens                    # check token usage
+```
+
+Sessions auto-generate names like `capybara-314` or `narwhal-1729`. Files live in `~/.mini/sessions/`:
+
+```
+~/.mini/sessions/capybara-314/
+├── model.yaml       # model, temperature, context limit
+├── system.md        # system prompt (edit with any editor)
+└── history.jsonl    # full conversation log
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-m, --model` | model for this turn (updates session) | from session |
+| `-t, --temp` | temperature override | from session |
+| `--history` | print conversation history | — |
+| `--tokens` | show token usage summary | — |
 
 ### mini ask
 

@@ -279,6 +279,44 @@ func askCmd() *cobra.Command {
 	return cmd
 }
 
+// ── mini sessions ──────────────────────────────────────
+
+func sessionsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sessions",
+		Short: "List chat sessions",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sessions, err := ListSessions()
+			if err != nil {
+				return err
+			}
+			if len(sessions) == 0 {
+				fmt.Println(Info.Render("  no sessions yet"))
+				return nil
+			}
+
+			// Sort by last used (most recent first)
+			sort.Slice(sessions, func(i, j int) bool {
+				return sessions[i].LastUsed.After(sessions[j].LastUsed)
+			})
+
+			fmt.Println()
+			for i, s := range sessions {
+				last := i == len(sessions)-1
+				age := shortAge(s.LastUsed)
+				turns := fmt.Sprintf("%d turns", s.Turns)
+				if s.Turns == 0 {
+					turns = "empty"
+				}
+				line := fmt.Sprintf("%-30s %8s  %s", s.Name, turns, Info.Render(age))
+				fmt.Printf("  %s%s\n", Branch(last), line)
+			}
+			fmt.Println()
+			return nil
+		},
+	}
+}
+
 // ── helpers ────────────────────────────────────────────
 
 func shortAge(t time.Time) string {

@@ -33,6 +33,8 @@ func main() {
 	root.AddCommand(modelsCmd())
 	root.AddCommand(selftestCmd())
 	root.AddCommand(askCmd())
+	root.AddCommand(chatCmd())
+	root.AddCommand(sessionsCmd())
 
 	err := root.Execute()
 
