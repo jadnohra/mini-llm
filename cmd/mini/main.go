@@ -32,6 +32,7 @@ func main() {
 	root.AddCommand(statusCmd())
 	root.AddCommand(modelsCmd())
 	root.AddCommand(selftestCmd())
+	root.AddCommand(askCmd())
 
 	err := root.Execute()
 

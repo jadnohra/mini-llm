@@ -204,6 +204,81 @@ func modelsCmd() *cobra.Command {
 	return cmd
 }
 
+// ── mini ask ───────────────────────────────────────────
+
+func askCmd() *cobra.Command {
+	var (
+		model     string
+		system    string
+		temp      float64
+		maxTokens int
+		noStream  bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "ask PROMPT",
+		Short: "Send a single-shot prompt to the LLM",
+		Long:  "Send a prompt and stream the response. Joins all arguments into one prompt.",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if model == "" {
+				model = cfg.DefaultModel
+			}
+
+			prompt := strings.Join(args, " ")
+
+			var msgs []ChatMessage
+			if system != "" {
+				msgs = append(msgs, ChatMessage{Role: "system", Content: system})
+			}
+			msgs = append(msgs, ChatMessage{Role: "user", Content: prompt})
+
+			req := ChatRequest{
+				Model:    model,
+				Messages: msgs,
+				Options: ChatOptions{
+					Temperature: temp,
+					NumPredict:  maxTokens,
+				},
+			}
+
+			oc := ollamaClient()
+
+			if noStream {
+				resp, err := oc.Chat(req)
+				if err != nil {
+					return err
+				}
+				fmt.Println(resp.Message.Content)
+				fmt.Println(Sep(50))
+				fmt.Println(Info.Render(fmt.Sprintf("  %s  %d tokens  %s",
+					model, resp.EvalCount, FmtTokS(resp.EvalCount, resp.EvalDuration))))
+				return nil
+			}
+
+			// Streaming (default)
+			fmt.Println()
+			final, err := oc.ChatStream(req, os.Stdout)
+			if err != nil {
+				return err
+			}
+			fmt.Println()
+			fmt.Println(Sep(50))
+			fmt.Println(Info.Render(fmt.Sprintf("  %s  %d tokens  %s",
+				model, final.EvalCount, FmtTokS(final.EvalCount, final.EvalDuration))))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&model, "model", "m", "", "model name (default from config)")
+	cmd.Flags().StringVarP(&system, "system", "s", "", "system prompt")
+	cmd.Flags().Float64VarP(&temp, "temp", "t", 0.3, "temperature")
+	cmd.Flags().IntVarP(&maxTokens, "max-tokens", "n", 4096, "max output tokens")
+	cmd.Flags().BoolVar(&noStream, "no-stream", false, "wait for full response instead of streaming")
+
+	return cmd
+}
+
 // ── helpers ────────────────────────────────────────────
 
 func shortAge(t time.Time) string {

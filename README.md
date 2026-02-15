@@ -87,20 +87,49 @@ make install      # copy to ~/bin
 mini status       # services, memory, disk, load
 mini models       # list pulled models
 mini selftest     # 5-step connectivity smoke test
+mini ask PROMPT   # single-shot prompt with streaming
 ```
 
 `mini status --json` and `mini models --json` produce machine-readable output.
 
+### mini ask
+
+Send a prompt and stream the response:
+
+```
+mini ask "write a fibonacci function in Go"
+mini ask -m deepseek-r1:32b "review this for race conditions"
+mini ask -s "You are a Go expert" "refactor this"
+mini ask --no-stream "short question"
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-m, --model` | model name | from config |
+| `-s, --system` | system prompt | — |
+| `-t, --temp` | temperature | `0.3` |
+| `-n, --max-tokens` | max output tokens | `4096` |
+| `--no-stream` | wait for full response | off |
+
 ### CLI configuration
 
-The CLI reads from `config.yaml` (the `cli:` section), `~/.mini/config.yaml`, and environment variables. Environment variables take priority.
+The CLI reads from `config.yaml` (the `cli:` section) and `~/.mini/config.yaml`. It errors out if required fields are missing.
 
-| Setting | Env var | Default |
-|---------|---------|---------|
-| host | `MINI_HOST` | `mac-mini.local` |
-| ssh_user | `MINI_SSH_USER` | (current user) |
-| ollama_port | `MINI_OLLAMA_PORT` | `11434` |
-| default_model | `MINI_DEFAULT_MODEL` | `qwen2.5-coder:32b` |
+| Setting | Description |
+|---------|-------------|
+| `host` | hostname of the Mac Mini |
+| `ssh_user` | SSH username |
+| `ollama_port` | Ollama port |
+| `llamacpp_port` | llama.cpp port |
+| `default_model` | model for `mini ask` |
+
+## Mini-tools
+
+Standalone tools in `mini-tools/`. Each is self-contained with its own dependencies.
+
+| Tool | Description |
+|------|-------------|
+| [tts](mini-tools/tts/README.md) | Text-to-speech using kokoro-tts |
 
 ## License
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,14 +16,6 @@ type Config struct {
 	DefaultModel string `yaml:"default_model"`
 }
 
-var defaultConfig = Config{
-	Host:         "mac-mini.local",
-	SSHUser:      currentUser(),
-	OllamaPort:   11434,
-	LlamaCPPPort: 8081,
-	DefaultModel: "qwen2.5-coder:32b",
-}
-
 func (c *Config) OllamaURL() string {
 	return fmt.Sprintf("http://%s:%d", c.Host, c.OllamaPort)
 }
@@ -33,9 +24,10 @@ func (c *Config) LlamaCPPURL() string {
 	return fmt.Sprintf("http://%s:%d", c.Host, c.LlamaCPPPort)
 }
 
-// LoadConfig loads config with priority: env > ~/.mini/config.yaml > ./config.yaml cli: section > defaults
+// LoadConfig loads config from ./config.yaml cli: section, then ~/.mini/config.yaml.
+// Errors out if required fields are missing.
 func LoadConfig() Config {
-	c := defaultConfig
+	var c Config
 
 	// Layer 1: ./config.yaml cli: section
 	loadProjectConfig(&c)
@@ -43,8 +35,25 @@ func LoadConfig() Config {
 	// Layer 2: ~/.mini/config.yaml (flat)
 	loadUserConfig(&c)
 
-	// Layer 3: env vars (highest priority)
-	loadEnv(&c)
+	// Validate required fields
+	var missing []string
+	if c.Host == "" {
+		missing = append(missing, "host")
+	}
+	if c.SSHUser == "" {
+		missing = append(missing, "ssh_user")
+	}
+	if c.OllamaPort == 0 {
+		missing = append(missing, "ollama_port")
+	}
+	if c.DefaultModel == "" {
+		missing = append(missing, "default_model")
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "missing config: %v\n", missing)
+		fmt.Fprintf(os.Stderr, "set in ./config.yaml (cli: section) or ~/.mini/config.yaml\n")
+		os.Exit(1)
+	}
 
 	return c
 }
@@ -82,35 +91,6 @@ func loadUserConfig(c *Config) {
 	}
 
 	merge(c, &user)
-}
-
-func loadEnv(c *Config) {
-	if v := os.Getenv("MINI_HOST"); v != "" {
-		c.Host = v
-	}
-	if v := os.Getenv("MINI_SSH_USER"); v != "" {
-		c.SSHUser = v
-	}
-	if v := os.Getenv("MINI_OLLAMA_PORT"); v != "" {
-		if p, err := strconv.Atoi(v); err == nil {
-			c.OllamaPort = p
-		}
-	}
-	if v := os.Getenv("MINI_LLAMACPP_PORT"); v != "" {
-		if p, err := strconv.Atoi(v); err == nil {
-			c.LlamaCPPPort = p
-		}
-	}
-	if v := os.Getenv("MINI_DEFAULT_MODEL"); v != "" {
-		c.DefaultModel = v
-	}
-}
-
-func currentUser() string {
-	if u := os.Getenv("USER"); u != "" {
-		return u
-	}
-	return "user"
 }
 
 // merge overwrites c with non-zero values from src
