@@ -735,8 +735,8 @@ def main():
     print("  \033[1mmini-llm setup\033[0m")
     print("  " + "─" * 48)
 
-    # interactive chooser (skip with --yes, --check, or --phase)
-    if not args.yes and not args.check and not args.phase:
+    # interactive chooser (skip with --yes, --check, --phase, or no TTY)
+    if not args.yes and not args.check and not args.phase and sys.stdin.isatty():
         choices = ask_options()
         cfg = apply_choices(cfg, choices)
         print()
