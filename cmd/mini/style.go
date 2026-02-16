@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -24,7 +25,7 @@ var (
 )
 
 // Pulse star animation frames
-var pulseFrames = []string{"✱", "✦", "·", "✦"}
+var pulseFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func PulseFrame() string {
 	idx := int(time.Now().UnixMilli()/200) % len(pulseFrames)
@@ -64,6 +65,27 @@ func FmtTokS(count int, durNano int64) string {
 	}
 	tps := float64(count) / (float64(durNano) / 1e9)
 	return fmt.Sprintf("%.1f tok/s", tps)
+}
+
+// Animated spinner — runs in background on stderr, returns stop function
+func Spinner(msg string) func() {
+	done := make(chan struct{})
+	go func() {
+		i := 0
+		for {
+			select {
+			case <-done:
+				fmt.Fprintf(os.Stderr, "\r\033[K")
+				return
+			default:
+				frame := Active.Render(pulseFrames[i%len(pulseFrames)])
+				fmt.Fprintf(os.Stderr, "\r%s %s", frame, Info.Render(msg))
+				i++
+				time.Sleep(80 * time.Millisecond)
+			}
+		}
+	}()
+	return func() { close(done); time.Sleep(50 * time.Millisecond) }
 }
 
 // Tree branch characters
