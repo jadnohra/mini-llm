@@ -35,6 +35,7 @@ func main() {
 	root.AddCommand(askCmd())
 	root.AddCommand(chatCmd())
 	root.AddCommand(sessionsCmd())
+	root.AddCommand(updateCmd())
 
 	err := root.Execute()
 

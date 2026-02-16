@@ -317,6 +317,77 @@ func sessionsCmd() *cobra.Command {
 	}
 }
 
+// ── mini update ────────────────────────────────────────
+
+func updateCmd() *cobra.Command {
+	var check, setup bool
+
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Pull latest code on the Mini",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ssh := sshClient()
+			repoDir := "~/mini-llm"
+
+			if check {
+				// Fetch remote without modifying working tree
+				local, err := ssh.Run(fmt.Sprintf("cd %s && git rev-parse --short HEAD", repoDir))
+				if err != nil {
+					return fmt.Errorf("cannot read version: %w", err)
+				}
+				ssh.Run(fmt.Sprintf("cd %s && git fetch", repoDir))
+				remote, _ := ssh.Run(fmt.Sprintf("cd %s && git rev-parse --short origin/main", repoDir))
+				behind, _ := ssh.Run(fmt.Sprintf("cd %s && git rev-list --count HEAD..origin/main", repoDir))
+
+				fmt.Println()
+				fmt.Println(Selected.Render("  mini update --check"))
+				fmt.Println(Sep(50))
+				fmt.Println(Row("local", local))
+				fmt.Println(Row("remote", remote))
+				if behind == "0" {
+					fmt.Println(Row("status", StatusOK("up to date")))
+				} else {
+					fmt.Println(Row("status", StatusFail(fmt.Sprintf("%s commit(s) behind", behind))))
+				}
+				fmt.Println()
+				return nil
+			}
+
+			// Pull
+			fmt.Println()
+			fmt.Println(Selected.Render("  mini update"))
+			fmt.Println(Sep(50))
+
+			output, err := ssh.Run(fmt.Sprintf("cd %s && git pull", repoDir))
+			if err != nil {
+				return fmt.Errorf("git pull failed: %w", err)
+			}
+			fmt.Println(Row("pull", output))
+
+			// Show current version
+			hash, _ := ssh.Run(fmt.Sprintf("cd %s && git rev-parse --short HEAD", repoDir))
+			fmt.Println(Row("version", hash))
+
+			if setup {
+				fmt.Println()
+				fmt.Println(Info.Render("  running install.sh --yes ..."))
+				fmt.Println()
+				pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+				if err := ssh.RunInteractive(fmt.Sprintf("%s && cd %s && ./install.sh --yes", pathPrefix, repoDir)); err != nil {
+					return fmt.Errorf("install.sh failed: %w", err)
+				}
+			}
+
+			fmt.Println()
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&check, "check", false, "compare versions without pulling")
+	cmd.Flags().BoolVar(&setup, "setup", false, "rerun install.sh after pulling")
+	return cmd
+}
+
 // ── helpers ────────────────────────────────────────────
 
 func shortAge(t time.Time) string {
