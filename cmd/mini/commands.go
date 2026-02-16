@@ -400,13 +400,14 @@ func ttsOnMini(ssh *SSHClient, text string, voice string, speed float64, readabl
 	// Shell-escape text by replacing single quotes
 	escaped := strings.ReplaceAll(text, "'", "'\\''")
 
-	uvCmd := fmt.Sprintf("uv run --project %s/mini-tools/tts llmtts -t '%s' -o %s --voice %s --speed %.1f",
-		repoDir, escaped, remotePath, voice, speed)
+	ttsDir := repoDir + "/mini-tools/tts"
+	uvCmd := fmt.Sprintf("uv run llmtts -t '%s' -o %s --voice %s --speed %.1f",
+		escaped, remotePath, voice, speed)
 	if readable {
 		uvCmd += " --readable"
 	}
 
-	fullCmd := fmt.Sprintf("%s && cd %s && %s", pathPrefix, repoDir, uvCmd)
+	fullCmd := fmt.Sprintf("%s && cd %s && %s", pathPrefix, ttsDir, uvCmd)
 	if _, err := ssh.Run(fullCmd); err != nil {
 		return nil, fmt.Errorf("TTS generation failed: %w", err)
 	}
