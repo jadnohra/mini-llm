@@ -408,8 +408,7 @@ func ttsOnMini(ssh *SSHClient, text string, voice string, speed float64, readabl
 	}
 
 	fullCmd := fmt.Sprintf("%s && cd %s && %s", pathPrefix, ttsDir, uvCmd)
-	// Use RunInteractive so user sees download progress (models, venv setup)
-	if err := ssh.RunInteractive(fullCmd); err != nil {
+	if _, err := ssh.Run(fullCmd); err != nil {
 		return nil, fmt.Errorf("TTS generation failed: %w", err)
 	}
 
