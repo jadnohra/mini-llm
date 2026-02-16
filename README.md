@@ -160,6 +160,7 @@ Standalone tools in `mini-tools/`. Each is self-contained with its own dependenc
 | Tool | Description |
 |------|-------------|
 | [tts](mini-tools/tts/README.md) | Text-to-speech using kokoro-tts |
+| [ts-align](mini-tools/ts-align/README.md) | Word-level audio-text alignment using MLX Whisper |
 
 ## License
 
