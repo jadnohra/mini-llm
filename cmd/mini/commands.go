@@ -465,8 +465,7 @@ func sayCmd() *cobra.Command {
 			}
 			ssh := sshClient()
 
-			fmt.Printf("\r%s %s\r", Info.Render("say:"), Info.Render(text))
-			fmt.Printf("\n  %s generating...\r", PulseFrame())
+			fmt.Printf("%s generating...\r", PulseFrame())
 			data, err := ttsOnMini(ssh, text, voice, speed, readable)
 			if err != nil {
 				return err
