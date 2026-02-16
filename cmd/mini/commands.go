@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -446,11 +447,22 @@ func sayCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "say TEXT",
+		Use:   "say [TEXT]",
 		Short: "Speak text on MacBook speakers (TTS on Mini)",
-		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			text := strings.Join(args, " ")
+			var text string
+			if len(args) > 0 {
+				text = strings.Join(args, " ")
+			} else {
+				b, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return fmt.Errorf("reading stdin: %w", err)
+				}
+				text = strings.TrimSpace(string(b))
+			}
+			if text == "" {
+				return fmt.Errorf("no text provided")
+			}
 			ssh := sshClient()
 
 			fmt.Printf("  %s generating speech...\r", PulseFrame())
