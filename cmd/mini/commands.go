@@ -401,7 +401,7 @@ func ttsOnMini(ssh *SSHClient, text string, voice string, speed float64, readabl
 	escaped := strings.ReplaceAll(text, "'", "'\\''")
 
 	ttsDir := repoDir + "/mini-tools/tts"
-	uvCmd := fmt.Sprintf("uv run llmtts -t '%s' -o %s --voice %s --speed %.1f",
+	uvCmd := fmt.Sprintf("uv run python llmtts.py -t '%s' -o %s --voice %s --speed %.1f",
 		escaped, remotePath, voice, speed)
 	if readable {
 		uvCmd += " --readable"

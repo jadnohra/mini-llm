@@ -18,7 +18,7 @@ func selftestCmd() *cobra.Command {
 			fmt.Println(Sep(50))
 
 			passed := 0
-			total := 5
+			total := 6
 
 			// 1. Config
 			fmt.Printf("  %s config\n", check(true))
@@ -89,6 +89,20 @@ func selftestCmd() *cobra.Command {
 				}
 			} else {
 				fmt.Printf("  %s inference: skipped (no models)\n", check(false))
+			}
+
+			// 6. TTS — generate short audio on Mini, verify mp3 bytes
+			fmt.Printf("  %s tts...", Info.Render("·"))
+			ttsData, err := ttsOnMini(ssh, "test", "af_heart", 1.0, false)
+			if err != nil {
+				fmt.Printf("\r  %s tts: %s\n", check(false), err)
+			} else if len(ttsData) < 100 {
+				fmt.Printf("\r  %s tts: too small (%d bytes)\n", check(false), len(ttsData))
+			} else if !(ttsData[0] == 0xFF && ttsData[1]&0xE0 == 0xE0) && string(ttsData[:3]) != "ID3" {
+				fmt.Printf("\r  %s tts: not valid mp3\n", check(false))
+			} else {
+				fmt.Printf("\r  %s tts (%s)\n", check(true), FmtSize(int64(len(ttsData))))
+				passed++
 			}
 
 			fmt.Println(Sep(50))
