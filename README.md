@@ -78,18 +78,36 @@ Valid phases: `system`, `ssh`, `headless`, `ollama`, `llamacpp`, `mlx`, `webui`,
 
 The `mini` command runs on your laptop and talks to the Mac Mini over SSH.
 
-```
-make build        # compile to bin/mini
-make install      # copy to ~/bin
-```
+### Setup
 
 ```
-mini status       # services, memory, disk, load
-mini models       # list pulled models
-mini selftest     # 5-step connectivity smoke test
-mini ask PROMPT   # single-shot prompt with streaming
-mini chat PROMPT  # multi-turn chat with session memory
-mini sessions     # list chat sessions
+make                    # compile to bin/mini
+```
+
+Add to `~/.zshrc` so `mini` works from any terminal:
+
+```
+export PATH="/path/to/mini-llm/bin:$PATH"
+```
+
+After code changes, `make` rebuilds the binary in place.
+
+### Commands
+
+```
+mini status            # services, memory, disk, load
+mini models            # list pulled models
+mini selftest          # 6-step connectivity + TTS smoke test
+mini ask PROMPT        # single-shot prompt with streaming
+mini chat PROMPT       # multi-turn chat with session memory
+mini sessions          # list chat sessions
+mini update            # git pull latest code on the Mini
+mini update --check    # compare local vs remote version
+mini update --setup    # pull + rerun install.sh
+mini say TEXT          # speak text on MacBook speakers (TTS on Mini)
+mini say               # read from stdin, empty line to send
+mini tts -t TEXT -o F  # convert text to mp3 file
+mini tts FILE -o F     # convert text file to mp3
 ```
 
 `mini status --json` and `mini models --json` produce machine-readable output.
@@ -121,6 +139,54 @@ Sessions auto-generate names like `capybara-314` or `narwhal-1729`. Files live i
 | `-t, --temp` | temperature override | from session |
 | `--history` | print conversation history | — |
 | `--tokens` | show token usage summary | — |
+
+### mini say
+
+Speak text on your MacBook speakers. Audio is generated on the Mini using kokoro-tts, transferred back, and played via `ffplay`.
+
+```
+mini say "my task is done"
+mini say --ask "should I continue?"      # speak, then prompt for input
+echo "hello world" | mini say            # pipe text
+mini say                                 # type text, empty line to send
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--ask` | prompt for input after speaking | off |
+| `--voice` | TTS voice | `af_heart` |
+| `--speed` | speech speed | `1.0` |
+| `--readable` | preprocess numbers/hex for speech | off |
+
+Requires `ffplay` on the MacBook (`brew install ffmpeg`).
+
+### mini tts
+
+Convert text to an mp3 file. Generation happens on the Mini.
+
+```
+mini tts -t "hello world" -o hello.mp3
+mini tts document.txt -o document.mp3
+mini tts -t "0x3a7b has 2048 entries" -o out.mp3 --readable
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-t, --text` | text to speak | — |
+| `-o, --output` | output mp3 file (required) | — |
+| `--voice` | TTS voice | `af_heart` |
+| `--speed` | speech speed | `1.0` |
+| `--readable` | preprocess numbers/hex for speech | off |
+
+### mini update
+
+Pull latest code on the Mini over SSH.
+
+```
+mini update              # git pull
+mini update --check      # compare versions without pulling
+mini update --setup      # pull + rerun install.sh
+```
 
 ### mini ask
 
