@@ -4,10 +4,10 @@
 build:
 	go build -o bin/mini ./cmd/mini/
 
-# Install mini to ~/bin (MacBook)
-install: build
-	cp bin/mini ~/bin/mini
-	@echo "  installed to ~/bin/mini"
+# Install mini to ~/go/bin (MacBook)
+install:
+	go install ./cmd/mini/
+	@echo "  installed to ~/go/bin/mini"
 
 # Run setup on the Mac Mini (via Python)
 setup:

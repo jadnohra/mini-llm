@@ -78,19 +78,25 @@ Valid phases: `system`, `ssh`, `headless`, `ollama`, `llamacpp`, `mlx`, `webui`,
 
 The `mini` command runs on your laptop and talks to the Mac Mini over SSH.
 
-### Setup
+### Install
 
 ```
-make                    # compile to bin/mini
+go install github.com/jadnohra/mini-llm/cmd/mini@latest
 ```
 
-Add to `~/.zshrc` so `mini` works from any terminal:
+This puts `mini` in `~/go/bin/`. Add to `~/.zshrc` if not already:
 
 ```
-export PATH="/path/to/mini-llm/bin:$PATH"
+export PATH="$HOME/go/bin:$PATH"
 ```
 
-After code changes, `make` rebuilds the binary in place.
+To update, run `go install ...@latest` again.
+
+For local development:
+
+```
+make              # compile to bin/mini
+```
 
 ### Commands
 
