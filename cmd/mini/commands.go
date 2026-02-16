@@ -465,12 +465,19 @@ func sayCmd() *cobra.Command {
 			}
 			ssh := sshClient()
 
-			fmt.Printf("%s generating...\r", PulseFrame())
+			// Show text with generating indicator on same line
+			display := text
+			if len(display) > 60 {
+				display = display[:57] + "..."
+			}
+			fmt.Printf("  %s %s\r", display, Info.Render("(generating...)"))
 			data, err := ttsOnMini(ssh, text, voice, speed, readable)
 			if err != nil {
+				fmt.Println()
 				return err
 			}
-			fmt.Printf("                    \r")
+			// Clear the line
+			fmt.Printf("\r%s\r", strings.Repeat(" ", len(display)+20))
 
 			// 1 MB cap
 			if len(data) > 1_000_000 {
