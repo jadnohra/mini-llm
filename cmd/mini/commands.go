@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -385,6 +386,166 @@ func updateCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&check, "check", false, "compare versions without pulling")
 	cmd.Flags().BoolVar(&setup, "setup", false, "rerun install.sh after pulling")
+	return cmd
+}
+
+// ── mini say ───────────────────────────────────────────
+
+func ttsOnMini(ssh *SSHClient, text string, voice string, speed float64, readable bool) ([]byte, error) {
+	ts := time.Now().UnixNano()
+	remotePath := fmt.Sprintf("/tmp/mini-tts-%d.mp3", ts)
+	repoDir := "~/mini-llm"
+	pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+
+	// Shell-escape text by replacing single quotes
+	escaped := strings.ReplaceAll(text, "'", "'\\''")
+
+	uvCmd := fmt.Sprintf("uv run --project %s/mini-tools/tts llmtts -t '%s' -o %s --voice %s --speed %.1f",
+		repoDir, escaped, remotePath, voice, speed)
+	if readable {
+		uvCmd += " --readable"
+	}
+
+	fullCmd := fmt.Sprintf("%s && cd %s && %s", pathPrefix, repoDir, uvCmd)
+	if _, err := ssh.Run(fullCmd); err != nil {
+		return nil, fmt.Errorf("TTS generation failed: %w", err)
+	}
+
+	// Transfer mp3 bytes and clean up remote file
+	data, err := ssh.RunBytes(fmt.Sprintf("cat %s && rm %s", remotePath, remotePath))
+	if err != nil {
+		return nil, fmt.Errorf("mp3 transfer failed: %w", err)
+	}
+	return data, nil
+}
+
+func playMP3(data []byte) error {
+	tmp, err := os.CreateTemp("", "mini-say-*.mp3")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	tmp.Close()
+
+	cmd := exec.Command("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp.Name())
+	return cmd.Run()
+}
+
+func sayCmd() *cobra.Command {
+	var (
+		ask      bool
+		voice    string
+		speed    float64
+		readable bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "say TEXT",
+		Short: "Speak text on MacBook speakers (TTS on Mini)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			text := strings.Join(args, " ")
+			ssh := sshClient()
+
+			fmt.Printf("  %s generating speech...\r", PulseFrame())
+			data, err := ttsOnMini(ssh, text, voice, speed, readable)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("                           \r")
+
+			// 1 MB cap
+			if len(data) > 1_000_000 {
+				return fmt.Errorf("audio too large (%s), use 'mini tts' for long text", FmtSize(int64(len(data))))
+			}
+
+			if err := playMP3(data); err != nil {
+				return fmt.Errorf("playback failed: %w", err)
+			}
+
+			if ask {
+				fmt.Print("> ")
+				var input string
+				fmt.Scanln(&input)
+				fmt.Println(input)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&ask, "ask", false, "prompt for input after speaking")
+	cmd.Flags().StringVar(&voice, "voice", "af_heart", "TTS voice")
+	cmd.Flags().Float64Var(&speed, "speed", 1.0, "speech speed")
+	cmd.Flags().BoolVar(&readable, "readable", false, "preprocess numbers/hex for speech")
+	return cmd
+}
+
+// ── mini tts ───────────────────────────────────────────
+
+func ttsCmd() *cobra.Command {
+	var (
+		text     string
+		output   string
+		voice    string
+		speed    float64
+		readable bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "tts [FILE]",
+		Short: "Convert text to mp3 (TTS on Mini)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if output == "" {
+				return fmt.Errorf("--output / -o is required")
+			}
+
+			var inputText string
+			if text != "" {
+				inputText = text
+			} else if len(args) > 0 {
+				b, err := os.ReadFile(args[0])
+				if err != nil {
+					return fmt.Errorf("cannot read %s: %w", args[0], err)
+				}
+				inputText = string(b)
+			} else {
+				return fmt.Errorf("either FILE argument or --text is required")
+			}
+
+			ssh := sshClient()
+
+			fmt.Printf("  %s generating speech...\r", PulseFrame())
+			data, err := ttsOnMini(ssh, inputText, voice, speed, readable)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("                           \r")
+
+			if err := os.WriteFile(output, data, 0644); err != nil {
+				return fmt.Errorf("cannot write %s: %w", output, err)
+			}
+
+			fmt.Println()
+			fmt.Println(Selected.Render("  mini tts"))
+			fmt.Println(Sep(50))
+			fmt.Println(Row("output", output))
+			fmt.Println(Row("size", FmtSize(int64(len(data)))))
+			fmt.Println()
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&text, "text", "t", "", "text to speak")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output mp3 file (required)")
+	cmd.Flags().StringVar(&voice, "voice", "af_heart", "TTS voice")
+	cmd.Flags().Float64Var(&speed, "speed", 1.0, "speech speed")
+	cmd.Flags().BoolVar(&readable, "readable", false, "preprocess numbers/hex for speech")
 	return cmd
 }
 

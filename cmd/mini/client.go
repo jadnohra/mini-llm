@@ -310,6 +310,27 @@ func (s *SSHClient) RunInteractive(command string) error {
 	return cmd.Run()
 }
 
+func (s *SSHClient) RunBytes(command string) ([]byte, error) {
+	cmd := exec.Command("ssh",
+		"-o", "ConnectTimeout=5",
+		"-o", "StrictHostKeyChecking=no",
+		fmt.Sprintf("%s@%s", s.user, s.host),
+		command,
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+	return stdout.Bytes(), nil
+}
+
 func (s *SSHClient) ReadFile(path string) (string, error) {
 	return s.Run(fmt.Sprintf("cat %s", path))
 }
