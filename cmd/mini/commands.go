@@ -454,29 +454,24 @@ func sayCmd() *cobra.Command {
 			if len(args) > 0 {
 				text = strings.Join(args, " ")
 			} else {
-				fmt.Println(Info.Render("  type text, empty line to send:"))
-				var lines []string
+				fmt.Print(Info.Render("say: "))
 				scanner := bufio.NewScanner(os.Stdin)
-				for scanner.Scan() {
-					line := scanner.Text()
-					if line == "" {
-						break
-					}
-					lines = append(lines, line)
+				if scanner.Scan() {
+					text = strings.TrimSpace(scanner.Text())
 				}
-				text = strings.Join(lines, " ")
 			}
 			if text == "" {
 				return fmt.Errorf("no text provided")
 			}
 			ssh := sshClient()
 
-			fmt.Printf("  %s generating speech...\r", PulseFrame())
+			fmt.Printf("\r%s %s\r", Info.Render("say:"), Info.Render(text))
+			fmt.Printf("\n  %s generating...\r", PulseFrame())
 			data, err := ttsOnMini(ssh, text, voice, speed, readable)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("                           \r")
+			fmt.Printf("                    \r")
 
 			// 1 MB cap
 			if len(data) > 1_000_000 {
