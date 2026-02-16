@@ -78,4 +78,4 @@ if ! command -v uv &>/dev/null; then
 fi
 
 # run setup (--with installs deps, --no-project skips building a package)
-uv run --with pyyaml --no-project python -m setup_mini "$@"
+PYTHONPATH="$PWD" uv run --with pyyaml --no-project python -m setup_mini "$@"
