@@ -1,9 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -454,11 +454,17 @@ func sayCmd() *cobra.Command {
 			if len(args) > 0 {
 				text = strings.Join(args, " ")
 			} else {
-				b, err := io.ReadAll(os.Stdin)
-				if err != nil {
-					return fmt.Errorf("reading stdin: %w", err)
+				fmt.Println(Info.Render("  type text, empty line to send:"))
+				var lines []string
+				scanner := bufio.NewScanner(os.Stdin)
+				for scanner.Scan() {
+					line := scanner.Text()
+					if line == "" {
+						break
+					}
+					lines = append(lines, line)
 				}
-				text = strings.TrimSpace(string(b))
+				text = strings.Join(lines, " ")
 			}
 			if text == "" {
 				return fmt.Errorf("no text provided")
