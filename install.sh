@@ -1,14 +1,57 @@
 #!/usr/bin/env bash
 
-cd "$(dirname "$0")"
+# mini-llm installer
+#
+# Fresh install (curl pipe):
+#   curl -sL https://raw.githubusercontent.com/jadnohra/mini-llm/main/install.sh | bash
+#
+# Re-run from cloned repo:
+#   cd ~/mini-llm && ./install.sh
 
-# guard against running from inside a nested mini-llm-main
-case "$PWD" in
-    */mini-llm-main/mini-llm-main*)
-        echo "  ERROR: nested mini-llm-main detected — delete the outer one first."
-        exit 1
-        ;;
-esac
+REPO_URL="https://github.com/jadnohra/mini-llm.git"
+INSTALL_DIR="$HOME/mini-llm"
+
+# ── Detect context ───────────────────────────────────────
+# If setup_mini/ exists relative to this script, we're inside the repo.
+# Otherwise we're in bootstrap mode (curl pipe or standalone run).
+
+SCRIPT_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_mini/__main__.py" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+if [ -n "$SCRIPT_DIR" ]; then
+    # ── Direct mode: already inside the repo ─────────────
+    cd "$SCRIPT_DIR"
+else
+    # ── Bootstrap mode: ensure git, clone, cd ────────────
+
+    # Stage 1: Ensure git (macOS ships a shim that triggers Xcode CLT install)
+    if ! git --version &>/dev/null; then
+        echo "  Xcode Command Line Tools needed (for git)..."
+        xcode-select --install 2>/dev/null || true
+        echo "  Waiting for installation — click Install in the dialog..."
+        until xcode-select -p &>/dev/null; do sleep 5; done
+        echo "  Xcode CLT installed."
+    fi
+
+    # Stage 2: Clone or update
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        echo "  Updating $INSTALL_DIR..."
+        git -C "$INSTALL_DIR" pull --ff-only
+    else
+        if [ -d "$INSTALL_DIR" ]; then
+            echo "  $INSTALL_DIR exists but is not a git repo — backing up."
+            mv "$INSTALL_DIR" "${INSTALL_DIR}.bak.$(date +%s)"
+        fi
+        echo "  Cloning mini-llm into $INSTALL_DIR..."
+        git clone "$REPO_URL" "$INSTALL_DIR"
+    fi
+
+    cd "$INSTALL_DIR"
+fi
+
+# ── Common setup (both modes) ────────────────────────────
 
 SOUND="setup_mini/sounds/alert.wav"
 

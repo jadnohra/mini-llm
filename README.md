@@ -5,10 +5,10 @@ A single command that turns a Mac Mini into a headless AI server. It installs Ol
 ## Install
 
 ```
-curl -sL https://github.com/jadnohra/mini-llm/archive/refs/heads/main.tar.gz | tar xz && cd mini-llm-main && ./install.sh
+curl -sL https://raw.githubusercontent.com/jadnohra/mini-llm/main/install.sh | bash
 ```
 
-The machine needs nothing beyond bash and curl, both of which ship with macOS. The script bootstraps its own dependencies, starting with uv and continuing through Xcode CLI tools and Homebrew if they are absent.
+The machine needs nothing beyond bash and curl, both of which ship with macOS. The script installs Xcode CLI tools (for git) if missing, clones the repo to `~/mini-llm`, bootstraps uv, and runs the setup. Everything else — Homebrew, Ollama, llama.cpp, MLX — is handled from there.
 
 An interactive chooser appears on first run. Arrow keys navigate, spacebar toggles, enter confirms.
 
@@ -40,10 +40,10 @@ A chime plays when the script finishes, whether it succeeded, failed, or was int
 
 ## Running again
 
-The script is idempotent. Running it a second time scans everything and touches only what has changed or is newly missing.
+The script is idempotent. Running it a second time pulls the latest code and scans everything, touching only what has changed or is newly missing.
 
 ```
-cd mini-llm-main && ./install.sh
+cd ~/mini-llm && ./install.sh
 ```
 
 ## Checking without installing
