@@ -349,15 +349,16 @@ class RecorderWindow: NSObject, NSWindowDelegate {
     }
 
     func showTranscribing() {
-        dotLabel.stringValue = "◌"
-        dotLabel.textColor = Term.amber
-        timeLabel.stringValue = ""
+        dotLabel.isHidden = true
+        timeLabel.isHidden = true
         hintLabel.stringValue = ""
         stopPulse()
 
         waveform.isHidden = true
+        let w = window.frame.width
         let transLabel = NSTextField(labelWithString: "transcribing")
-        transLabel.frame = NSRect(x: 36, y: 40, width: 200, height: 18)
+        transLabel.frame = NSRect(x: 0, y: 40, width: w, height: 18)
+        transLabel.alignment = .center
         transLabel.font = Term.font
         transLabel.textColor = Term.dim
         window.contentView?.addSubview(transLabel)
