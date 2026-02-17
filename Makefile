@@ -4,10 +4,13 @@
 build:
 	go build -o bin/mini ./cmd/mini/
 
-# Install mini to ~/go/bin (MacBook)
+# Install mini to ~/go/bin + write ~/.mini/config.yaml
 install:
 	go install ./cmd/mini/
+	@mkdir -p ~/.mini
+	@sed -n '/^cli:/,/^[^ ]/p' config.yaml | grep -v '^cli:' | grep -v '^[^ ]' | sed 's/^  //' > ~/.mini/config.yaml
 	@echo "  installed to ~/go/bin/mini"
+	@echo "  config written to ~/.mini/config.yaml"
 
 # Run setup on the Mac Mini (via Python)
 setup:

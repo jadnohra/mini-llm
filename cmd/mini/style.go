@@ -67,25 +67,10 @@ func FmtTokS(count int, durNano int64) string {
 	return fmt.Sprintf("%.1f tok/s", tps)
 }
 
-// Animated spinner — runs in background on stderr, returns stop function
+// Spinner shows a static status on stderr, returns a function to clear it
 func Spinner(msg string) func() {
-	done := make(chan struct{})
-	go func() {
-		i := 0
-		for {
-			select {
-			case <-done:
-				fmt.Fprintf(os.Stderr, "\r\033[K")
-				return
-			default:
-				frame := Active.Render(pulseFrames[i%len(pulseFrames)])
-				fmt.Fprintf(os.Stderr, "\r%s %s", frame, Info.Render(msg))
-				i++
-				time.Sleep(80 * time.Millisecond)
-			}
-		}
-	}()
-	return func() { close(done); time.Sleep(50 * time.Millisecond) }
+	fmt.Fprintf(os.Stderr, "%s\n", Info.Render("("+msg+")"))
+	return func() {}
 }
 
 // Tree branch characters

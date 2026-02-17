@@ -208,6 +208,25 @@ func (c *OllamaClient) Delete(model string) error {
 	return nil
 }
 
+// ── SSH common ──────────────────────────────────────────
+
+// sshCmd builds an ssh exec.Cmd with multiplexing and any extra flags.
+// The first connection authenticates and becomes the ControlMaster; all
+// subsequent connections (from any process, terminal, or agent) reuse it.
+func sshCmd(user, host string, extra []string, command ...string) *exec.Cmd {
+	args := []string{
+		"-o", "ConnectTimeout=5",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPath=~/.ssh/mini-mux-%r@%h:%p",
+		"-o", "ControlPersist=10m",
+	}
+	args = append(args, extra...)
+	args = append(args, fmt.Sprintf("%s@%s", user, host))
+	args = append(args, command...)
+	return exec.Command("ssh", args...)
+}
+
 // ── SSH tunnel ─────────────────────────────────────────
 
 type SSHTunnel struct {
@@ -226,13 +245,10 @@ func StartTunnel(user, host string, remotePort int) (*SSHTunnel, error) {
 	ln.Close()
 
 	forward := fmt.Sprintf("%d:localhost:%d", localPort, remotePort)
-	cmd := exec.Command("ssh",
-		"-o", "ConnectTimeout=5",
-		"-o", "StrictHostKeyChecking=no",
+	cmd := sshCmd(user, host, []string{
 		"-o", "ExitOnForwardFailure=yes",
 		"-N", "-L", forward,
-		fmt.Sprintf("%s@%s", user, host),
-	)
+	})
 	cmd.Stderr = io.Discard
 
 	if err := cmd.Start(); err != nil {
@@ -277,12 +293,7 @@ func NewSSHClient(user, host string) *SSHClient {
 }
 
 func (s *SSHClient) Run(command string) (string, error) {
-	cmd := exec.Command("ssh",
-		"-o", "ConnectTimeout=5",
-		"-o", "StrictHostKeyChecking=no",
-		fmt.Sprintf("%s@%s", s.user, s.host),
-		command,
-	)
+	cmd := sshCmd(s.user, s.host, nil, command)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -298,12 +309,7 @@ func (s *SSHClient) Run(command string) (string, error) {
 }
 
 func (s *SSHClient) RunInteractive(command string) error {
-	cmd := exec.Command("ssh",
-		"-t",
-		"-o", "ConnectTimeout=5",
-		fmt.Sprintf("%s@%s", s.user, s.host),
-		command,
-	)
+	cmd := sshCmd(s.user, s.host, []string{"-t"}, command)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -311,12 +317,7 @@ func (s *SSHClient) RunInteractive(command string) error {
 }
 
 func (s *SSHClient) RunBytes(command string) ([]byte, error) {
-	cmd := exec.Command("ssh",
-		"-o", "ConnectTimeout=5",
-		"-o", "StrictHostKeyChecking=no",
-		fmt.Sprintf("%s@%s", s.user, s.host),
-		command,
-	)
+	cmd := sshCmd(s.user, s.host, nil, command)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -337,7 +338,12 @@ func (s *SSHClient) ReadFile(path string) (string, error) {
 
 func (s *SSHClient) Push(local, remote string) error {
 	target := fmt.Sprintf("%s@%s:%s", s.user, s.host, remote)
-	cmd := exec.Command("scp", "-r", local, target)
+	cmd := exec.Command("scp",
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPath=~/.ssh/mini-mux-%r@%h:%p",
+		"-o", "ControlPersist=10m",
+		"-r", local, target,
+	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
