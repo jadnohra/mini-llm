@@ -698,25 +698,34 @@ func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (str
 	remotePath := fmt.Sprintf("/tmp/mini-stt-%d.wav", ts)
 
 	// Transfer audio to Mini
+	t0 := time.Now()
 	if err := ssh.Push(localPath, remotePath); err != nil {
 		return "", fmt.Errorf("audio transfer failed: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "  scp: %dms\n", time.Since(t0).Milliseconds())
 	cleanupCmd := fmt.Sprintf("rm -f %s", remotePath)
 
 	// Try the persistent STT server
+	t0 = time.Now()
 	text, err := sttViaServer(ssh, remotePath, lang)
 	if err == nil {
+		fmt.Fprintf(os.Stderr, "  transcribe: %dms\n", time.Since(t0).Milliseconds())
 		ssh.Run(cleanupCmd)
 		return text, nil
 	}
+	fmt.Fprintf(os.Stderr, "  server not running, starting...\n")
 
 	// Server not running — start it, then retry
+	t0 = time.Now()
 	if startErr := sttStartServer(ssh); startErr != nil {
-		// Can't start server — fall back to one-shot uv run (slow)
+		fmt.Fprintf(os.Stderr, "  server start failed: %v, falling back to one-shot\n", startErr)
 		return sttOneShot(ssh, remotePath, model, lang, cleanupCmd)
 	}
+	fmt.Fprintf(os.Stderr, "  server start: %dms\n", time.Since(t0).Milliseconds())
 
+	t0 = time.Now()
 	text, err = sttViaServer(ssh, remotePath, lang)
+	fmt.Fprintf(os.Stderr, "  transcribe: %dms\n", time.Since(t0).Milliseconds())
 	ssh.Run(cleanupCmd)
 	if err != nil {
 		return "", fmt.Errorf("transcription failed: %w", err)
