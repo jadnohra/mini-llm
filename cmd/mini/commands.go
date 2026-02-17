@@ -632,7 +632,7 @@ func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (str
 		`python -c "from tsalign import transcribe; print(transcribe('%s', model='%s', language='%s')['text'].strip())"`,
 		remotePath, model, lang)
 	sttDir := repoDir + "/mini-tools/ts-align"
-	fullCmd := fmt.Sprintf("%s && cd %s && uv run %s; rm -f %s",
+	fullCmd := fmt.Sprintf("%s && cd %s && uv run %s; STATUS=$?; rm -f %s; exit $STATUS",
 		pathPrefix, sttDir, pyCmd, remotePath)
 
 	text, err := ssh.Run(fullCmd)
@@ -648,6 +648,7 @@ func sttCmd() *cobra.Command {
 		copyClip bool
 		model    string
 		lang     string
+		filePath string
 	)
 
 	cmd := &cobra.Command{
@@ -656,18 +657,30 @@ func sttCmd() *cobra.Command {
 		Short:   "Record voice and transcribe (STT on Mini)",
 		Long:    "Record from MacBook mic, send to Mini for speech-to-text via MLX Whisper.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Record
-			stop := Spinner("recording")
-			audioPath, err := recordAudio()
-			stop()
-			if err != nil {
-				return err
+			var audioPath string
+			var cleanup bool
+
+			if filePath != "" {
+				// Use provided file directly
+				audioPath = filePath
+			} else {
+				// Record from mic
+				stop := Spinner("recording")
+				var err error
+				audioPath, err = recordAudio()
+				stop()
+				if err != nil {
+					return err
+				}
+				cleanup = true
 			}
-			defer os.Remove(audioPath)
+			if cleanup {
+				defer os.Remove(audioPath)
+			}
 
 			// Transcribe on Mini
 			ssh := sshClient()
-			stop = Spinner("transcribing")
+			stop := Spinner("transcribing")
 			text, err := sttOnMini(ssh, audioPath, model, lang)
 			stop()
 			if err != nil {
@@ -690,6 +703,7 @@ func sttCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&copyClip, "copy", false, "copy transcribed text to clipboard")
 	cmd.Flags().StringVarP(&model, "model", "m", "mlx-community/whisper-large-v3-turbo", "Whisper model")
 	cmd.Flags().StringVarP(&lang, "lang", "l", "en", "language code")
+	cmd.Flags().StringVarP(&filePath, "file", "f", "", "transcribe existing audio file (skip recording)")
 	return cmd
 }
 
