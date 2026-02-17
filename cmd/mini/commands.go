@@ -743,6 +743,9 @@ func sttViaServer(ssh *SSHClient, remotePath string, lang string) (string, error
 func sttStartServer(ssh *SSHClient) error {
 	pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 	sttDir := "~/mini-llm/mini-tools/ts-align"
+	// Kill any existing server to avoid port conflict
+	ssh.Run("pkill -f stt_server.py 2>/dev/null")
+	time.Sleep(500 * time.Millisecond)
 	// Ensure venv exists with deps, then start server in background
 	startCmd := fmt.Sprintf(`%s && cd %s && `+
 		`(test -f $HOME/.mini/envs/stt/bin/python || (uv venv --python 3.12 $HOME/.mini/envs/stt && uv pip install --python $HOME/.mini/envs/stt/bin/python mlx-whisper numpy)) && `+
