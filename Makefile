@@ -1,12 +1,14 @@
 .PHONY: build install setup check clean
 
-# Build the mini CLI (runs on your MacBook)
+# Build the mini CLI + recorder (runs on your MacBook)
 build:
 	go build -o bin/mini ./cmd/mini/
+	swiftc -O -o mini-tools/recorder/recorder mini-tools/recorder/recorder.swift -framework AVFoundation -framework AppKit
 
 # Install mini to ~/go/bin + write ~/.mini/config.yaml
 install:
 	go install ./cmd/mini/
+	swiftc -O -o mini-tools/recorder/recorder mini-tools/recorder/recorder.swift -framework AVFoundation -framework AppKit
 	@mkdir -p ~/.mini
 	@sed -n '/^cli:/,/^[^ ]/p' config.yaml | grep -v '^cli:' | grep -v '^[^ ]' | sed 's/^  //' > ~/.mini/config.yaml
 	@echo "  installed to ~/go/bin/mini"

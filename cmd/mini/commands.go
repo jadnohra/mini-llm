@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -567,78 +568,57 @@ func ttsCmd() *cobra.Command {
 
 // ── mini hear ──────────────────────────────────────────
 
-// startRecording starts ffmpeg recording from the mic, encoding to MP3 in real-time
-// to keep the file small. Returns the process.
-func startRecording(mp3Path string) (*exec.Cmd, error) {
-	rec := exec.Command("ffmpeg", "-y", "-f", "avfoundation", "-i", ":0",
-		"-ar", "16000", "-ac", "1", "-codec:a", "libmp3lame", "-b:a", "32k",
-		mp3Path)
-	rec.Stderr = nil
-	rec.Stdout = nil
-	if err := rec.Start(); err != nil {
-		return nil, fmt.Errorf("cannot start recording: %w", err)
+// recorderBin returns the path to the native recorder binary.
+func recorderBin() string {
+	// Look relative to the executable first (dev), then in the repo
+	exe, _ := os.Executable()
+	if exe != "" {
+		dir := filepath.Dir(exe)
+		// Check ../mini-tools/recorder/recorder (go install layout)
+		candidate := filepath.Join(dir, "..", "repos", "jad", "mini-llm", "mini-tools", "recorder", "recorder")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
-	return rec, nil
+	// Check well-known repo locations
+	home, _ := os.UserHomeDir()
+	for _, path := range []string{
+		filepath.Join(home, "repos", "jad", "mini-llm", "mini-tools", "recorder", "recorder"),
+		filepath.Join(home, "mini-llm", "mini-tools", "recorder", "recorder"),
+	} {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return "mini-tools/recorder/recorder" // fallback to relative
 }
 
-// stopRecording gracefully stops an ffmpeg recording process.
-func stopRecording(rec *exec.Cmd) {
-	if rec != nil && rec.Process != nil {
-		rec.Process.Signal(os.Interrupt)
-		rec.Wait()
-	}
-}
-
-// recordAudio pops up a native macOS dialog and records from the mic.
-// Supports Stop, Restart, and Cancel. Works from any context.
+// recordAudio launches the native recorder window. Returns the path to the
+// recorded audio file. Works from any context: terminal, agent, tool call.
 func recordAudio() (string, error) {
-	mp3Path := fmt.Sprintf("/tmp/mini-hear-%d.mp3", time.Now().UnixNano())
+	wavPath := fmt.Sprintf("/tmp/mini-stt-%d.wav", time.Now().UnixNano())
 
-	rec, err := startRecording(mp3Path)
-	if err != nil {
-		return "", err
-	}
-
-	// AppleScript loop: show dialog with Stop/Restart/Cancel buttons.
-	// Restart kills the current recording and starts fresh.
-	script := fmt.Sprintf(`
-		set recPath to "%s"
-		set action to "Restart"
-		repeat while action is "Restart"
-			set action to button returned of (display dialog "🎙 Recording... speak now." buttons {"Cancel", "Restart", "Stop"} default button "Stop" with title "mini hear")
-			if action is "Restart" then
-				do shell script "kill -INT $(pgrep -n ffmpeg) 2>/dev/null; sleep 0.2; ffmpeg -y -f avfoundation -i :0 -ar 16000 -ac 1 -codec:a libmp3lame -b:a 32k " & recPath & " >/dev/null 2>&1 &"
-			end if
-		end repeat
-		return action
-	`, mp3Path)
-
-	dialog := exec.Command("osascript", "-e", script)
-	out, dialogErr := dialog.Output()
-
-	// Stop the recording process started from Go
-	stopRecording(rec)
-
-	action := strings.TrimSpace(string(out))
-	if dialogErr != nil || action == "Cancel" {
-		os.Remove(mp3Path)
+	cmd := exec.Command(recorderBin(), "--output", wavPath, "--position", "center")
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		os.Remove(wavPath)
 		return "", fmt.Errorf("recording cancelled")
 	}
 
 	// Verify we got audio
-	info, err := os.Stat(mp3Path)
-	if err != nil || info.Size() < 500 {
-		os.Remove(mp3Path)
+	info, err := os.Stat(wavPath)
+	if err != nil || info.Size() < 1000 {
+		os.Remove(wavPath)
 		return "", fmt.Errorf("no audio recorded")
 	}
 
-	return mp3Path, nil
+	return wavPath, nil
 }
 
 // sttOnMini transfers audio to the Mini and returns transcribed text.
 func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (string, error) {
 	ts := time.Now().UnixNano()
-	remotePath := fmt.Sprintf("/tmp/mini-hear-%d.mp3", ts)
+	remotePath := fmt.Sprintf("/tmp/mini-stt-%d.wav", ts)
 	repoDir := "~/mini-llm"
 	pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 
