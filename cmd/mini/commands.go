@@ -663,7 +663,7 @@ func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (str
 	return text, nil
 }
 
-func hearCmd() *cobra.Command {
+func sttCmd() *cobra.Command {
 	var (
 		copyClip bool
 		model    string
@@ -671,9 +671,10 @@ func hearCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "hear",
-		Short: "Record voice and transcribe (STT on Mini)",
-		Long:  "Record from MacBook mic, send to Mini for speech-to-text via MLX Whisper.",
+		Use:     "stt",
+		Aliases: []string{"hear"},
+		Short:   "Record voice and transcribe (STT on Mini)",
+		Long:    "Record from MacBook mic, send to Mini for speech-to-text via MLX Whisper.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Record
 			stop := Spinner("recording")

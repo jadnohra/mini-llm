@@ -38,7 +38,7 @@ func main() {
 	root.AddCommand(updateCmd())
 	root.AddCommand(sayCmd())
 	root.AddCommand(ttsCmd())
-	root.AddCommand(hearCmd())
+	root.AddCommand(sttCmd())
 
 	err := root.Execute()
 
