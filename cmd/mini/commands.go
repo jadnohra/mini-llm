@@ -2,8 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -689,28 +692,22 @@ func recordAudio() (string, error) {
 	return wavPath, nil
 }
 
-// sttOnMini transfers audio to the Mini and returns transcribed text.
+// sttOnMini sends audio to the Mini's STT server via SSH tunnel and returns text.
 // Uses a persistent STT server on the Mini (port 8090). If the server isn't
-// running, starts it automatically via nohup. The server lazy-loads the model
-// on first request and auto-unloads after idle timeout.
+// running, starts it automatically via nohup. Posts audio directly over HTTP
+// tunnel — no SCP needed.
 func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (string, error) {
-	ts := time.Now().UnixNano()
-	remotePath := fmt.Sprintf("/tmp/mini-stt-%d.wav", ts)
-
-	// Transfer audio to Mini
-	t0 := time.Now()
-	if err := ssh.Push(localPath, remotePath); err != nil {
-		return "", fmt.Errorf("audio transfer failed: %w", err)
+	// Read audio file
+	audioData, err := os.ReadFile(localPath)
+	if err != nil {
+		return "", fmt.Errorf("reading audio: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "  scp: %dms\n", time.Since(t0).Milliseconds())
-	cleanupCmd := fmt.Sprintf("rm -f %s", remotePath)
 
-	// Try the persistent STT server
-	t0 = time.Now()
-	text, err := sttViaServer(ssh, remotePath, lang)
+	// Try posting directly via tunnel
+	t0 := time.Now()
+	text, err := sttPost(audioData, lang)
 	if err == nil {
 		fmt.Fprintf(os.Stderr, "  transcribe: %dms\n", time.Since(t0).Milliseconds())
-		ssh.Run(cleanupCmd)
 		return text, nil
 	}
 	fmt.Fprintf(os.Stderr, "  server not running, starting...\n")
@@ -718,26 +715,49 @@ func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (str
 	// Server not running — start it, then retry
 	t0 = time.Now()
 	if startErr := sttStartServer(ssh); startErr != nil {
-		fmt.Fprintf(os.Stderr, "  server start failed: %v, falling back to one-shot\n", startErr)
-		return sttOneShot(ssh, remotePath, model, lang, cleanupCmd)
+		fmt.Fprintf(os.Stderr, "  server start failed: %v\n", startErr)
+		return "", fmt.Errorf("stt server failed to start: %w", startErr)
 	}
 	fmt.Fprintf(os.Stderr, "  server start: %dms\n", time.Since(t0).Milliseconds())
 
+	// Reset tunnel to pick up the new server
+	if sttTunnel != nil {
+		sttTunnel.Close()
+		sttTunnel = nil
+	}
+
 	t0 = time.Now()
-	text, err = sttViaServer(ssh, remotePath, lang)
+	text, err = sttPost(audioData, lang)
 	fmt.Fprintf(os.Stderr, "  transcribe: %dms\n", time.Since(t0).Milliseconds())
-	ssh.Run(cleanupCmd)
 	if err != nil {
 		return "", fmt.Errorf("transcription failed: %w", err)
 	}
 	return text, nil
 }
 
-func sttViaServer(ssh *SSHClient, remotePath string, lang string) (string, error) {
-	curlCmd := fmt.Sprintf(
-		`curl -sf --max-time 120 -X POST -H "X-Language: %s" --data-binary @%s http://localhost:8090/transcribe`,
-		lang, remotePath)
-	return ssh.Run(curlCmd)
+// sttPost sends audio data directly to the STT server via SSH tunnel.
+func sttPost(audioData []byte, lang string) (string, error) {
+	t, err := ensureSTTTunnel()
+	if err != nil {
+		return "", err
+	}
+
+	req, _ := http.NewRequest("POST", t.LocalURL()+"/transcribe", bytes.NewReader(audioData))
+	req.Header.Set("Content-Type", "audio/wav")
+	req.Header.Set("X-Language", lang)
+
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("stt server %d: %s", resp.StatusCode, string(body))
+	}
+	return strings.TrimSpace(string(body)), nil
 }
 
 func sttStartServer(ssh *SSHClient) error {
@@ -762,22 +782,6 @@ func sttStartServer(ssh *SSHClient) error {
 		}
 	}
 	return fmt.Errorf("stt server did not start")
-}
-
-func sttOneShot(ssh *SSHClient, remotePath, model, lang, cleanupCmd string) (string, error) {
-	repoDir := "~/mini-llm"
-	pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
-	pyCmd := fmt.Sprintf(
-		`python -c "from tsalign import transcribe; print(transcribe('%s', model='%s', language='%s')['text'].strip())"`,
-		remotePath, model, lang)
-	sttDir := repoDir + "/mini-tools/ts-align"
-	fullCmd := fmt.Sprintf("%s && cd %s && uv run %s; STATUS=$?; %s; exit $STATUS",
-		pathPrefix, sttDir, pyCmd, cleanupCmd)
-	text, err := ssh.Run(fullCmd)
-	if err != nil {
-		return "", fmt.Errorf("transcription failed: %w", err)
-	}
-	return text, nil
 }
 
 func sttCmd() *cobra.Command {

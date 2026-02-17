@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	cfg    Config
-	tunnel *SSHTunnel
+	cfg       Config
+	tunnel    *SSHTunnel
+	sttTunnel *SSHTunnel
 )
 
 func ensureTunnel() (*SSHTunnel, error) {
@@ -19,6 +20,15 @@ func ensureTunnel() (*SSHTunnel, error) {
 	var err error
 	tunnel, err = StartTunnel(cfg.SSHUser, cfg.Host, cfg.OllamaPort)
 	return tunnel, err
+}
+
+func ensureSTTTunnel() (*SSHTunnel, error) {
+	if sttTunnel != nil {
+		return sttTunnel, nil
+	}
+	var err error
+	sttTunnel, err = StartTunnel(cfg.SSHUser, cfg.Host, 8090)
+	return sttTunnel, err
 }
 
 func main() {
@@ -43,9 +53,12 @@ func main() {
 
 	err := root.Execute()
 
-	// Clean up tunnel
+	// Clean up tunnels
 	if tunnel != nil {
 		tunnel.Close()
+	}
+	if sttTunnel != nil {
+		sttTunnel.Close()
 	}
 
 	if err != nil {

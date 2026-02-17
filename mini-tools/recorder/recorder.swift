@@ -139,8 +139,8 @@ class RecorderWindow: NSObject, NSWindowDelegate {
     let timeLabel: NSTextField
 
     init(outputPath: String, position: String) {
-        let width: CGFloat = 400
-        let height: CGFloat = 72
+        let width: CGFloat = 300
+        let height: CGFloat = 56
 
         // Borderless floating window
         window = KeyPanel(
@@ -157,7 +157,7 @@ class RecorderWindow: NSObject, NSWindowDelegate {
 
         // Round corners
         window.contentView?.wantsLayer = true
-        window.contentView?.layer?.cornerRadius = 10
+        window.contentView?.layer?.cornerRadius = 14
         window.contentView?.layer?.masksToBounds = true
         window.contentView?.layer?.backgroundColor = Term.bg.cgColor
 
@@ -167,30 +167,30 @@ class RecorderWindow: NSObject, NSWindowDelegate {
         //     ●  00:03  ▁▂▃▅▇▅▃▂▁▂▃▅▆▅▃▂▁▂▃▅▆▅▃▁
         //            esc cancel · ⏎ done
 
-        let pad: CGFloat = 14
-        let row1Y: CGFloat = 38
-        let row2Y: CGFloat = 12
+        let pad: CGFloat = 12
+        let row1Y: CGFloat = 30
+        let row2Y: CGFloat = 8
 
         // Recording dot
         dotLabel = NSTextField(labelWithString: "●")
-        dotLabel.frame = NSRect(x: pad, y: row1Y, width: 18, height: 18)
-        dotLabel.font = Term.fontBold
+        dotLabel.frame = NSRect(x: pad, y: row1Y, width: 16, height: 16)
+        dotLabel.font = Term.fontSm
         dotLabel.textColor = Term.red
 
         // Time
         timeLabel = NSTextField(labelWithString: "00:00")
-        timeLabel.frame = NSRect(x: pad + 22, y: row1Y, width: 46, height: 18)
-        timeLabel.font = Term.font
+        timeLabel.frame = NSRect(x: pad + 18, y: row1Y, width: 42, height: 16)
+        timeLabel.font = Term.fontSm
         timeLabel.textColor = Term.dim
 
         // Waveform — fills remaining width
-        let wfX = pad + 72
-        waveform = WaveformView(frame: NSRect(x: wfX, y: row1Y - 2, width: width - wfX - pad, height: 22))
+        let wfX = pad + 62
+        waveform = WaveformView(frame: NSRect(x: wfX, y: row1Y - 2, width: width - wfX - pad, height: 20))
 
         // Keyboard hints
-        hintLabel = NSTextField(labelWithString: "esc cancel · ⏎ done")
-        hintLabel.frame = NSRect(x: 0, y: row2Y, width: width, height: 16)
-        hintLabel.font = Term.fontSm
+        hintLabel = NSTextField(labelWithString: "esc · ⏎ done")
+        hintLabel.frame = NSRect(x: 0, y: row2Y, width: width, height: 14)
+        hintLabel.font = Term.fontXs
         hintLabel.textColor = Term.dim
         hintLabel.alignment = .center
 
@@ -331,9 +331,9 @@ class RecorderWindow: NSObject, NSWindowDelegate {
                           let line = String(data: data, encoding: .utf8) else { return }
                     if line.contains("server not running") {
                         DispatchQueue.main.async {
-                            self?.statusText = "starting"
+                            self?.statusText = "loading model"
                         }
-                    } else if line.contains("server start:") {
+                    } else if line.contains("transcribe:") {
                         DispatchQueue.main.async {
                             self?.statusText = "transcribing"
                         }
