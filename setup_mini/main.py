@@ -491,96 +491,6 @@ def apply_webui(items: list[dict]):
             run(f"sudo launchctl kickstart system/com.mini.open-webui 2>/dev/null", check=False)
 
 
-# ── Phase: stt_server ──────────────────────────────────
-
-
-def check_stt_server(cfg: dict) -> list[dict]:
-    items = []
-    repo = Path.home() / "mini-llm"
-    stt_script = repo / "mini-tools" / "ts-align" / "stt_server.py"
-    if not stt_script.exists():
-        return items
-
-    # check venv + mlx-whisper installed
-    stt_python = env_python("stt")
-    ok = os.path.exists(stt_python) and run_ok(f"uv pip show --python {stt_python} mlx-whisper 2>/dev/null")
-    items.append({"name": "STT server deps", "ok": ok, "action": "install_stt"})
-
-    # check launchd plist
-    plist = Path("/Library/LaunchDaemons/com.mini.stt-server.plist")
-    ok = plist.exists() and "stt_server.py" in (plist.read_text() if plist.exists() else "")
-    items.append({"name": "STT server auto-start", "ok": ok, "action": "plist_stt"})
-
-    # check if running
-    ok = run_ok("sudo launchctl list com.mini.stt-server 2>/dev/null")
-    items.append({"name": "STT server running", "ok": ok, "action": "start_stt"})
-
-    return items
-
-
-def apply_stt_server(items: list[dict]):
-    for item in items:
-        if item["ok"]:
-            continue
-        if item["action"] == "install_stt":
-            print(f"    creating stt venv + installing mlx-whisper...")
-            ensure_env("stt")
-            run(f"uv pip install --python {env_python('stt')} mlx-whisper numpy", capture=False, check=False)
-        elif item["action"] == "plist_stt":
-            print(f"    creating STT server daemon (needs sudo)...")
-            plist_path = Path("/Library/LaunchDaemons/com.mini.stt-server.plist")
-            user = os.environ.get("USER", "root")
-            home = str(Path.home())
-            repo = f"{home}/mini-llm"
-            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.mini.stt-server</string>
-    <key>UserName</key>
-    <string>{user}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{env_python('stt')}</string>
-        <string>{repo}/mini-tools/ts-align/stt_server.py</string>
-        <string>--port</string>
-        <string>8090</string>
-        <string>--idle-timeout</string>
-        <string>300</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>{repo}/mini-tools/ts-align</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>HOME</key>
-        <string>{home}</string>
-    </dict>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>{home}/Library/Logs/stt-server.log</string>
-    <key>StandardErrorPath</key>
-    <string>{home}/Library/Logs/stt-server.err</string>
-</dict>
-</plist>"""
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".plist", delete=False) as tmp:
-                tmp.write(plist_content)
-                tmp_path = tmp.name
-            run(f"sudo cp {tmp_path} {plist_path} && sudo chmod 644 {plist_path}", check=False)
-            os.unlink(tmp_path)
-            run(f"sudo launchctl bootout system/com.mini.stt-server 2>/dev/null", check=False)
-            run(f"sudo launchctl bootstrap system {plist_path}", capture=False, check=False)
-        elif item["action"] == "start_stt":
-            print(f"    starting STT server...")
-            plist_path = Path("/Library/LaunchDaemons/com.mini.stt-server.plist")
-            run(f"sudo launchctl bootstrap system {plist_path} 2>/dev/null", check=False)
-            run(f"sudo launchctl kickstart system/com.mini.stt-server 2>/dev/null", check=False)
-
-
 # ── Phase: tailscale ───────────────────────────────────
 
 
@@ -615,7 +525,6 @@ PHASES = [
     ("llamacpp", check_llamacpp, apply_llamacpp),
     ("mlx", check_mlx, apply_mlx),
     ("webui", check_webui, apply_webui),
-    ("stt_server", check_stt_server, apply_stt_server),
     ("tailscale", check_tailscale, apply_tailscale),
 ]
 

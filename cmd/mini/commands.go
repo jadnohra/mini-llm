@@ -690,7 +690,9 @@ func recordAudio() (string, error) {
 }
 
 // sttOnMini transfers audio to the Mini and returns transcribed text.
-// Tries the persistent STT server first (fast); falls back to one-shot uv run.
+// Uses a persistent STT server on the Mini (port 8090). If the server isn't
+// running, starts it automatically via nohup. The server lazy-loads the model
+// on first request and auto-unloads after idle timeout.
 func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (string, error) {
 	ts := time.Now().UnixNano()
 	remotePath := fmt.Sprintf("/tmp/mini-stt-%d.wav", ts)
@@ -699,18 +701,58 @@ func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (str
 	if err := ssh.Push(localPath, remotePath); err != nil {
 		return "", fmt.Errorf("audio transfer failed: %w", err)
 	}
-
-	// Try persistent STT server first (curl to localhost:8090)
-	curlCmd := fmt.Sprintf(
-		`curl -sf -X POST -H "X-Language: %s" --data-binary @%s http://localhost:8090/transcribe`,
-		lang, remotePath)
 	cleanupCmd := fmt.Sprintf("rm -f %s", remotePath)
-	text, err := ssh.Run(fmt.Sprintf("%s; STATUS=$?; %s; exit $STATUS", curlCmd, cleanupCmd))
+
+	// Try the persistent STT server
+	text, err := sttViaServer(ssh, remotePath, lang)
 	if err == nil {
+		ssh.Run(cleanupCmd)
 		return text, nil
 	}
 
-	// Fall back to one-shot uv run (slow — loads model fresh each time)
+	// Server not running — start it, then retry
+	if startErr := sttStartServer(ssh); startErr != nil {
+		// Can't start server — fall back to one-shot uv run (slow)
+		return sttOneShot(ssh, remotePath, model, lang, cleanupCmd)
+	}
+
+	text, err = sttViaServer(ssh, remotePath, lang)
+	ssh.Run(cleanupCmd)
+	if err != nil {
+		return "", fmt.Errorf("transcription failed: %w", err)
+	}
+	return text, nil
+}
+
+func sttViaServer(ssh *SSHClient, remotePath string, lang string) (string, error) {
+	curlCmd := fmt.Sprintf(
+		`curl -sf --max-time 120 -X POST -H "X-Language: %s" --data-binary @%s http://localhost:8090/transcribe`,
+		lang, remotePath)
+	return ssh.Run(curlCmd)
+}
+
+func sttStartServer(ssh *SSHClient) error {
+	pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+	sttDir := "~/mini-llm/mini-tools/ts-align"
+	// Ensure venv exists with deps, then start server in background
+	startCmd := fmt.Sprintf(`%s && cd %s && `+
+		`(test -f $HOME/.mini/envs/stt/bin/python || (uv venv --python 3.12 $HOME/.mini/envs/stt && uv pip install --python $HOME/.mini/envs/stt/bin/python mlx-whisper numpy)) && `+
+		`nohup $HOME/.mini/envs/stt/bin/python stt_server.py --port 8090 --idle-timeout 300 </dev/null >>$HOME/Library/Logs/stt-server.log 2>>$HOME/Library/Logs/stt-server.err &`,
+		pathPrefix, sttDir)
+	if _, err := ssh.Run(startCmd); err != nil {
+		return err
+	}
+	// Wait for server to be ready (up to 30s — first start may download model)
+	for i := 0; i < 30; i++ {
+		time.Sleep(time.Second)
+		if health, err := ssh.Run("curl -sf http://localhost:8090/health"); err == nil && health != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("stt server did not start")
+}
+
+func sttOneShot(ssh *SSHClient, remotePath, model, lang, cleanupCmd string) (string, error) {
 	repoDir := "~/mini-llm"
 	pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 	pyCmd := fmt.Sprintf(
@@ -719,12 +761,10 @@ func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (str
 	sttDir := repoDir + "/mini-tools/ts-align"
 	fullCmd := fmt.Sprintf("%s && cd %s && uv run %s; STATUS=$?; %s; exit $STATUS",
 		pathPrefix, sttDir, pyCmd, cleanupCmd)
-
-	text, err = ssh.Run(fullCmd)
+	text, err := ssh.Run(fullCmd)
 	if err != nil {
 		return "", fmt.Errorf("transcription failed: %w", err)
 	}
-
 	return text, nil
 }
 
