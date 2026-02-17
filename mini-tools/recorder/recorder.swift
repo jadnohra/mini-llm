@@ -24,25 +24,23 @@ class AudioRecorder: NSObject {
     func start() throws {
         let url = URL(fileURLWithPath: outputPath)
         let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
+        let nativeFormat = inputNode.outputFormat(forBus: 0)
 
-        // Write as WAV (lossless, Whisper-friendly), convert to MP3 later if needed
-        let settings: [String: Any] = [
+        // Record at native format (48kHz mono float32 → 16-bit PCM WAV)
+        // Whisper resamples internally, so 48kHz is fine — no in-tap conversion needed
+        let fileSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: 16000.0,
+            AVSampleRateKey: nativeFormat.sampleRate,
             AVNumberOfChannelsKey: 1,
             AVLinearPCMBitDepthKey: 16,
             AVLinearPCMIsFloatKey: false,
         ]
-        let outputFormat = AVAudioFormat(settings: settings)!
-        let converter = AVAudioConverter(from: format, to: outputFormat)!
+        audioFile = try AVAudioFile(forWriting: url, settings: fileSettings)
 
-        audioFile = try AVAudioFile(forWriting: url, settings: settings)
-
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buffer, _ in
             guard let self = self, let file = self.audioFile else { return }
 
-            // Calculate level from input buffer
+            // Calculate level
             let channelData = buffer.floatChannelData?[0]
             let frameLength = Int(buffer.frameLength)
             var rms: Float = 0
@@ -56,19 +54,9 @@ class AudioRecorder: NSObject {
                 self.onLevel?(rms)
             }
 
-            // Convert and write
-            let frameCount = AVAudioFrameCount(
-                Double(buffer.frameLength) * outputFormat.sampleRate / format.sampleRate
-            )
-            guard frameCount > 0 else { return }
-            let convertedBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: frameCount)!
-            var error: NSError?
-            converter.convert(to: convertedBuffer, error: &error) { _, outStatus in
-                outStatus.pointee = .haveData
-                return buffer
-            }
+            // Write (AVAudioFile handles float32→int16 conversion)
             do {
-                try file.write(from: convertedBuffer)
+                try file.write(from: buffer)
             } catch {}
         }
 
@@ -204,6 +192,7 @@ class RecorderWindow: NSObject, NSWindowDelegate {
         window.title = "mini stt"
         window.level = .floating
         window.isReleasedWhenClosed = false
+        window.hidesOnDeactivate = false
         window.titlebarAppearsTransparent = true
 
         recorder = AudioRecorder(outputPath: outputPath)
