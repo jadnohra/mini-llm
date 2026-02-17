@@ -769,7 +769,7 @@ func sttStartServer(ssh *SSHClient) error {
 	// Ensure venv exists with deps, then start server in background
 	startCmd := fmt.Sprintf(`%s && cd %s && `+
 		`(test -f $HOME/.mini/envs/stt/bin/python || (uv venv --python 3.12 $HOME/.mini/envs/stt && uv pip install --python $HOME/.mini/envs/stt/bin/python mlx-whisper numpy)) && `+
-		`nohup $HOME/.mini/envs/stt/bin/python stt_server.py --port 8090 --idle-timeout 300 </dev/null >>$HOME/Library/Logs/stt-server.log 2>>$HOME/Library/Logs/stt-server.err &`,
+		`nohup $HOME/.mini/envs/stt/bin/python stt_server.py --port 8090 --idle-timeout 3600 </dev/null >>$HOME/Library/Logs/stt-server.log 2>>$HOME/Library/Logs/stt-server.err &`,
 		pathPrefix, sttDir)
 	if _, err := ssh.Run(startCmd); err != nil {
 		return err
