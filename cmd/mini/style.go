@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 )
 
 // Terminus palette — muted 256-color, no emoji
@@ -67,10 +68,53 @@ func FmtTokS(count int, durNano int64) string {
 	return fmt.Sprintf("%.1f tok/s", tps)
 }
 
-// Spinner shows a static status on stderr, returns a function to clear it
+func termWidth() int {
+	w, _, err := term.GetSize(os.Stderr.Fd())
+	if err != nil || w <= 0 {
+		return 80
+	}
+	return w
+}
+
+func centerText(text string) string {
+	w := termWidth()
+	visibleWidth := lipgloss.Width(text)
+	pad := (w - visibleWidth) / 2
+	if pad <= 0 {
+		return text
+	}
+	return strings.Repeat(" ", pad) + text
+}
+
+func isTerminal() bool {
+	_, _, err := term.GetSize(os.Stderr.Fd())
+	return err == nil
+}
+
+// Spinner shows a centered animated spinner on stderr, returns a function to stop it.
+// When stderr is not a TTY (piped), emits a single status line instead of animation.
 func Spinner(msg string) func() {
-	fmt.Fprintf(os.Stderr, "%s\n", Info.Render("("+msg+")"))
-	return func() {}
+	if !isTerminal() {
+		fmt.Fprintf(os.Stderr, "%s\n", msg)
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				// Clear the spinner line
+				fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", termWidth()))
+				return
+			default:
+				frame := pulseFrames[int(time.Now().UnixMilli()/120)%len(pulseFrames)]
+				line := Active.Render(frame) + " " + Info.Render(msg)
+				fmt.Fprintf(os.Stderr, "\r%s", centerText(line))
+				time.Sleep(80 * time.Millisecond)
+			}
+		}
+	}()
+	return func() { close(done); time.Sleep(10 * time.Millisecond) }
 }
 
 // Tree branch characters
