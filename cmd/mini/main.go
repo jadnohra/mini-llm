@@ -39,6 +39,7 @@ func main() {
 	root.AddCommand(sayCmd())
 	root.AddCommand(ttsCmd())
 	root.AddCommand(sttCmd())
+	root.AddCommand(dictateCmd())
 
 	err := root.Execute()
 

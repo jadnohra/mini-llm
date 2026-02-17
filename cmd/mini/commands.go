@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -566,31 +567,104 @@ func ttsCmd() *cobra.Command {
 	return cmd
 }
 
-// ── mini hear ──────────────────────────────────────────
+// ── mini dictate ───────────────────────────────────────
 
-// recorderBin returns the path to the native recorder binary.
-func recorderBin() string {
-	// Look relative to the executable first (dev), then in the repo
+// toolBin returns the path to a compiled binary in mini-tools/<name>/<name>.
+func toolBin(name string) string {
 	exe, _ := os.Executable()
 	if exe != "" {
 		dir := filepath.Dir(exe)
-		// Check ../mini-tools/recorder/recorder (go install layout)
-		candidate := filepath.Join(dir, "..", "repos", "jad", "mini-llm", "mini-tools", "recorder", "recorder")
+		candidate := filepath.Join(dir, "..", "repos", "jad", "mini-llm", "mini-tools", name, name)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 	}
-	// Check well-known repo locations
 	home, _ := os.UserHomeDir()
 	for _, path := range []string{
-		filepath.Join(home, "repos", "jad", "mini-llm", "mini-tools", "recorder", "recorder"),
-		filepath.Join(home, "mini-llm", "mini-tools", "recorder", "recorder"),
+		filepath.Join(home, "repos", "jad", "mini-llm", "mini-tools", name, name),
+		filepath.Join(home, "mini-llm", "mini-tools", name, name),
 	} {
 		if _, err := os.Stat(path); err == nil {
 			return path
 		}
 	}
-	return "mini-tools/recorder/recorder" // fallback to relative
+	return filepath.Join("mini-tools", name, name)
+}
+
+func dictateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "dictate [on|off]",
+		Short: "Menubar dictation (Ctrl+Shift+M to record and paste)",
+		Long:  "Launches a persistent menubar app. Press Ctrl+Shift+M or click the icon to record, transcribe, and paste into the focused terminal.",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			action := "on"
+			if len(args) > 0 {
+				action = args[0]
+			}
+
+			pipePath := "/tmp/mini-dictate.pipe"
+			pidFile := "/tmp/mini-dictate.pid"
+
+			switch action {
+			case "off":
+				// Send quit via pipe
+				if data, err := os.ReadFile(pidFile); err == nil {
+					pidStr := strings.TrimSpace(string(data))
+					// Check if alive
+					if c := exec.Command("kill", "-0", pidStr); c.Run() == nil {
+						if f, err := os.OpenFile(pipePath, os.O_WRONLY, 0); err == nil {
+							f.WriteString("quit\n")
+							f.Close()
+							fmt.Println("dictate stopped")
+							return nil
+						}
+					}
+				}
+				fmt.Println("dictate is not running")
+				return nil
+
+			case "on":
+				bin := toolBin("dictate")
+				if _, err := os.Stat(bin); err != nil {
+					return fmt.Errorf("dictate binary not found at %s — compile with:\n  swiftc -O -o %s mini-tools/dictate/dictate.swift -framework AppKit -framework Carbon", bin, bin)
+				}
+
+				// Check if already running
+				if data, err := os.ReadFile(pidFile); err == nil {
+					pidStr := strings.TrimSpace(string(data))
+					if c := exec.Command("kill", "-0", pidStr); c.Run() == nil {
+						fmt.Println("dictate is already running")
+						return nil
+					}
+				}
+
+				// Spawn in background
+				exe, _ := os.Executable()
+				c := exec.Command(bin, "--mini-path", exe)
+				c.Stdout = nil
+				c.Stderr = nil
+				// Detach from parent
+				c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+				if err := c.Start(); err != nil {
+					return fmt.Errorf("failed to start dictate: %w", err)
+				}
+				fmt.Printf("dictate started (pid %d) — Ctrl+Shift+M or click [m] in menubar\n", c.Process.Pid)
+				return nil
+
+			default:
+				return fmt.Errorf("unknown action: %s (use 'on' or 'off')", action)
+			}
+		},
+	}
+	return cmd
+}
+
+// ── mini hear ──────────────────────────────────────────
+
+// recorderBin returns the path to the native recorder binary.
+func recorderBin() string {
+	return toolBin("recorder")
 }
 
 // recordAudio launches the native recorder window. Returns the path to the
