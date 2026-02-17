@@ -565,6 +565,153 @@ func ttsCmd() *cobra.Command {
 	return cmd
 }
 
+// ── mini hear ──────────────────────────────────────────
+
+// startRecording starts ffmpeg recording from the mic, encoding to MP3 in real-time
+// to keep the file small. Returns the process.
+func startRecording(mp3Path string) (*exec.Cmd, error) {
+	rec := exec.Command("ffmpeg", "-y", "-f", "avfoundation", "-i", ":0",
+		"-ar", "16000", "-ac", "1", "-codec:a", "libmp3lame", "-b:a", "32k",
+		mp3Path)
+	rec.Stderr = nil
+	rec.Stdout = nil
+	if err := rec.Start(); err != nil {
+		return nil, fmt.Errorf("cannot start recording: %w", err)
+	}
+	return rec, nil
+}
+
+// stopRecording gracefully stops an ffmpeg recording process.
+func stopRecording(rec *exec.Cmd) {
+	if rec != nil && rec.Process != nil {
+		rec.Process.Signal(os.Interrupt)
+		rec.Wait()
+	}
+}
+
+// recordAudio pops up a native macOS dialog and records from the mic.
+// Supports Stop, Restart, and Cancel. Works from any context.
+func recordAudio() (string, error) {
+	mp3Path := fmt.Sprintf("/tmp/mini-hear-%d.mp3", time.Now().UnixNano())
+
+	rec, err := startRecording(mp3Path)
+	if err != nil {
+		return "", err
+	}
+
+	// AppleScript loop: show dialog with Stop/Restart/Cancel buttons.
+	// Restart kills the current recording and starts fresh.
+	script := fmt.Sprintf(`
+		set recPath to "%s"
+		set action to "Restart"
+		repeat while action is "Restart"
+			set action to button returned of (display dialog "🎙 Recording... speak now." buttons {"Cancel", "Restart", "Stop"} default button "Stop" with title "mini hear")
+			if action is "Restart" then
+				do shell script "kill -INT $(pgrep -n ffmpeg) 2>/dev/null; sleep 0.2; ffmpeg -y -f avfoundation -i :0 -ar 16000 -ac 1 -codec:a libmp3lame -b:a 32k " & recPath & " >/dev/null 2>&1 &"
+			end if
+		end repeat
+		return action
+	`, mp3Path)
+
+	dialog := exec.Command("osascript", "-e", script)
+	out, dialogErr := dialog.Output()
+
+	// Stop the recording process started from Go
+	stopRecording(rec)
+
+	action := strings.TrimSpace(string(out))
+	if dialogErr != nil || action == "Cancel" {
+		os.Remove(mp3Path)
+		return "", fmt.Errorf("recording cancelled")
+	}
+
+	// Verify we got audio
+	info, err := os.Stat(mp3Path)
+	if err != nil || info.Size() < 500 {
+		os.Remove(mp3Path)
+		return "", fmt.Errorf("no audio recorded")
+	}
+
+	return mp3Path, nil
+}
+
+// sttOnMini transfers audio to the Mini and returns transcribed text.
+func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (string, error) {
+	ts := time.Now().UnixNano()
+	remotePath := fmt.Sprintf("/tmp/mini-hear-%d.mp3", ts)
+	repoDir := "~/mini-llm"
+	pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+
+	// Transfer audio to Mini
+	if err := ssh.Push(localPath, remotePath); err != nil {
+		return "", fmt.Errorf("audio transfer failed: %w", err)
+	}
+
+	// Run transcription using tsalign's transcribe function
+	pyCmd := fmt.Sprintf(
+		`python -c "from tsalign import transcribe; print(transcribe('%s', model='%s', language='%s')['text'].strip())"`,
+		remotePath, model, lang)
+	sttDir := repoDir + "/mini-tools/ts-align"
+	fullCmd := fmt.Sprintf("%s && cd %s && uv run %s; rm -f %s",
+		pathPrefix, sttDir, pyCmd, remotePath)
+
+	text, err := ssh.Run(fullCmd)
+	if err != nil {
+		return "", fmt.Errorf("transcription failed: %w", err)
+	}
+
+	return text, nil
+}
+
+func hearCmd() *cobra.Command {
+	var (
+		copyClip bool
+		model    string
+		lang     string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "hear",
+		Short: "Record voice and transcribe (STT on Mini)",
+		Long:  "Record from MacBook mic, send to Mini for speech-to-text via MLX Whisper.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Record
+			stop := Spinner("recording")
+			audioPath, err := recordAudio()
+			stop()
+			if err != nil {
+				return err
+			}
+			defer os.Remove(audioPath)
+
+			// Transcribe on Mini
+			ssh := sshClient()
+			stop = Spinner("transcribing")
+			text, err := sttOnMini(ssh, audioPath, model, lang)
+			stop()
+			if err != nil {
+				return err
+			}
+
+			// Output
+			fmt.Println(text)
+
+			if copyClip {
+				clip := exec.Command("pbcopy")
+				clip.Stdin = strings.NewReader(text)
+				clip.Run()
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&copyClip, "copy", false, "copy transcribed text to clipboard")
+	cmd.Flags().StringVarP(&model, "model", "m", "mlx-community/whisper-large-v3-turbo", "Whisper model")
+	cmd.Flags().StringVarP(&lang, "lang", "l", "en", "language code")
+	return cmd
+}
+
 // ── helpers ────────────────────────────────────────────
 
 func shortAge(t time.Time) string {
