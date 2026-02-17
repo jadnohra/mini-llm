@@ -163,28 +163,33 @@ class RecorderWindow: NSObject, NSWindowDelegate {
 
         recorder = AudioRecorder(outputPath: outputPath)
 
-        // Layout:
-        //  ● rec 00:00  ▁▂▃▅▇▅▃▂▁▂▃▅▆▅▃▁▁▂▃▅▇▅▃▂▁▂▃▅▆▅▃▁▁▂▃▅
-        //                          esc cancel · ⏎ done
+        // Layout — recording:
+        //     ●  00:03  ▁▂▃▅▇▅▃▂▁▂▃▅▆▅▃▂▁▂▃▅▆▅▃▁
+        //            esc cancel · ⏎ done
 
-        // Recording dot + label
-        dotLabel = NSTextField(labelWithString: "● rec")
-        dotLabel.frame = NSRect(x: 12, y: 40, width: 50, height: 18)
+        let pad: CGFloat = 14
+        let row1Y: CGFloat = 38
+        let row2Y: CGFloat = 12
+
+        // Recording dot
+        dotLabel = NSTextField(labelWithString: "●")
+        dotLabel.frame = NSRect(x: pad, y: row1Y, width: 18, height: 18)
         dotLabel.font = Term.fontBold
         dotLabel.textColor = Term.red
 
         // Time
         timeLabel = NSTextField(labelWithString: "00:00")
-        timeLabel.frame = NSRect(x: 62, y: 40, width: 46, height: 18)
+        timeLabel.frame = NSRect(x: pad + 22, y: row1Y, width: 46, height: 18)
         timeLabel.font = Term.font
         timeLabel.textColor = Term.dim
 
-        // Waveform
-        waveform = WaveformView(frame: NSRect(x: 110, y: 38, width: width - 122, height: 22))
+        // Waveform — fills remaining width
+        let wfX = pad + 72
+        waveform = WaveformView(frame: NSRect(x: wfX, y: row1Y - 2, width: width - wfX - pad, height: 22))
 
         // Keyboard hints
         hintLabel = NSTextField(labelWithString: "esc cancel · ⏎ done")
-        hintLabel.frame = NSRect(x: 0, y: 10, width: width, height: 16)
+        hintLabel.frame = NSRect(x: 0, y: row2Y, width: width, height: 16)
         hintLabel.font = Term.fontSm
         hintLabel.textColor = Term.dim
         hintLabel.alignment = .center
@@ -199,13 +204,11 @@ class RecorderWindow: NSObject, NSWindowDelegate {
             let mouse = NSEvent.mouseLocation
             var origin: NSPoint
             if position == "center" {
-                // Center horizontally, near mouse vertically
                 origin = NSPoint(
                     x: sf.midX - width / 2,
                     y: max(sf.minY, min(mouse.y + 30, sf.maxY - height))
                 )
             } else {
-                // Near mouse
                 origin = NSPoint(
                     x: max(sf.minX, min(mouse.x - width / 2, sf.maxX - width)),
                     y: max(sf.minY, min(mouse.y + 30, sf.maxY - height))
@@ -214,21 +217,13 @@ class RecorderWindow: NSObject, NSWindowDelegate {
             window.setFrameOrigin(origin)
         }
 
-        // Shadow to make it pop
         window.hasShadow = true
-
-        // Brand label
-        let brandLabel = NSTextField(labelWithString: "mini-llm")
-        brandLabel.frame = NSRect(x: width - 68, y: 40, width: 56, height: 18)
-        brandLabel.font = Term.fontXs
-        brandLabel.textColor = Term.brand
 
         let cv = window.contentView!
         cv.addSubview(dotLabel)
         cv.addSubview(timeLabel)
         cv.addSubview(waveform)
         cv.addSubview(hintLabel)
-        cv.addSubview(brandLabel)
 
         // Invisible buttons for key equivalents
         let doneBtn = NSButton(frame: .zero)
@@ -308,6 +303,8 @@ class RecorderWindow: NSObject, NSWindowDelegate {
     var miniPath: String?
     var copyToClipboard = false
 
+    var statusText = "transcribing"
+
     @objc func doneClicked() {
         result = "done"
         stopRecording()
@@ -323,7 +320,25 @@ class RecorderWindow: NSObject, NSWindowDelegate {
                 stt.arguments = args
                 let pipe = Pipe()
                 stt.standardOutput = pipe
-                stt.standardError = FileHandle.nullDevice
+                // Read stderr to detect cold start status
+                let errPipe = Pipe()
+                stt.standardError = errPipe
+
+                // Monitor stderr for stage updates
+                errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                    let data = handle.availableData
+                    guard !data.isEmpty,
+                          let line = String(data: data, encoding: .utf8) else { return }
+                    if line.contains("server not running") {
+                        DispatchQueue.main.async {
+                            self?.statusText = "starting"
+                        }
+                    } else if line.contains("server start:") {
+                        DispatchQueue.main.async {
+                            self?.statusText = "transcribing"
+                        }
+                    }
+                }
 
                 do { try stt.run() } catch {
                     DispatchQueue.main.async {
@@ -333,6 +348,7 @@ class RecorderWindow: NSObject, NSWindowDelegate {
                     return
                 }
                 stt.waitUntilExit()
+                errPipe.fileHandleForReading.readabilityHandler = nil
 
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let text = String(data: data, encoding: .utf8)?
@@ -348,25 +364,30 @@ class RecorderWindow: NSObject, NSWindowDelegate {
         }
     }
 
+    private let spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
     func showTranscribing() {
         dotLabel.isHidden = true
         timeLabel.isHidden = true
-        hintLabel.stringValue = ""
+        hintLabel.isHidden = true
         stopPulse()
-
         waveform.isHidden = true
+
         let w = window.frame.width
-        let transLabel = NSTextField(labelWithString: "transcribing")
-        transLabel.frame = NSRect(x: 0, y: 40, width: w, height: 18)
+        let h = window.frame.height
+        let transLabel = NSTextField(labelWithString: "⠋ transcribing")
+        transLabel.frame = NSRect(x: 0, y: (h - 18) / 2, width: w, height: 18)
         transLabel.alignment = .center
         transLabel.font = Term.font
         transLabel.textColor = Term.dim
         window.contentView?.addSubview(transLabel)
 
-        var dots = 0
-        Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
-            dots = (dots + 1) % 4
-            transLabel.stringValue = "transcribing" + String(repeating: ".", count: dots)
+        var tick = 0
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            tick += 1
+            let frame = self.spinnerFrames[tick % self.spinnerFrames.count]
+            transLabel.stringValue = "\(frame) \(self.statusText)"
         }
     }
 
