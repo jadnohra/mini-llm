@@ -218,7 +218,7 @@ func sshCmd(user, host string, extra []string, command ...string) *exec.Cmd {
 		"-o", "ConnectTimeout=5",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "ControlMaster=auto",
-		"-o", "ControlPath=~/.ssh/mini-mux-%r@%h:%p",
+		"-o", "ControlPath=/tmp/mini-ssh-%C",
 		"-o", "ControlPersist=10m",
 	}
 	args = append(args, extra...)
@@ -340,7 +340,7 @@ func (s *SSHClient) Push(local, remote string) error {
 	target := fmt.Sprintf("%s@%s:%s", s.user, s.host, remote)
 	cmd := exec.Command("scp",
 		"-o", "ControlMaster=auto",
-		"-o", "ControlPath=~/.ssh/mini-mux-%r@%h:%p",
+		"-o", "ControlPath=/tmp/mini-ssh-%C",
 		"-o", "ControlPersist=10m",
 		"-r", local, target,
 	)
