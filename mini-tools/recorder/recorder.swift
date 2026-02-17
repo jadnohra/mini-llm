@@ -324,22 +324,6 @@ class RecorderWindow: NSObject, NSWindowDelegate {
                 let errPipe = Pipe()
                 stt.standardError = errPipe
 
-                // Monitor stderr for stage updates
-                errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                    let data = handle.availableData
-                    guard !data.isEmpty,
-                          let line = String(data: data, encoding: .utf8) else { return }
-                    if line.contains("server not running") {
-                        DispatchQueue.main.async {
-                            self?.statusText = "loading model"
-                        }
-                    } else if line.contains("transcribe:") {
-                        DispatchQueue.main.async {
-                            self?.statusText = "transcribing"
-                        }
-                    }
-                }
-
                 do { try stt.run() } catch {
                     DispatchQueue.main.async {
                         self.showError("stt failed")
@@ -347,8 +331,23 @@ class RecorderWindow: NSObject, NSWindowDelegate {
                     }
                     return
                 }
+
+                // Read stderr in a dedicated thread (readabilityHandler is unreliable with waitUntilExit)
+                let errHandle = errPipe.fileHandleForReading
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    while true {
+                        let chunk = errHandle.availableData
+                        if chunk.isEmpty { break } // EOF
+                        guard let text = String(data: chunk, encoding: .utf8) else { continue }
+                        if text.contains("server not running") {
+                            DispatchQueue.main.async { self?.statusText = "loading model" }
+                        } else if text.contains("transcribe:") {
+                            DispatchQueue.main.async { self?.statusText = "transcribing" }
+                        }
+                    }
+                }
+
                 stt.waitUntilExit()
-                errPipe.fileHandleForReading.readabilityHandler = nil
 
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let text = String(data: data, encoding: .utf8)?
