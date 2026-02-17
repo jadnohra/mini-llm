@@ -690,26 +690,37 @@ func recordAudio() (string, error) {
 }
 
 // sttOnMini transfers audio to the Mini and returns transcribed text.
+// Tries the persistent STT server first (fast); falls back to one-shot uv run.
 func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (string, error) {
 	ts := time.Now().UnixNano()
 	remotePath := fmt.Sprintf("/tmp/mini-stt-%d.wav", ts)
-	repoDir := "~/mini-llm"
-	pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 
 	// Transfer audio to Mini
 	if err := ssh.Push(localPath, remotePath); err != nil {
 		return "", fmt.Errorf("audio transfer failed: %w", err)
 	}
 
-	// Run transcription using tsalign's transcribe function
+	// Try persistent STT server first (curl to localhost:8090)
+	curlCmd := fmt.Sprintf(
+		`curl -sf -X POST -H "X-Language: %s" --data-binary @%s http://localhost:8090/transcribe`,
+		lang, remotePath)
+	cleanupCmd := fmt.Sprintf("rm -f %s", remotePath)
+	text, err := ssh.Run(fmt.Sprintf("%s; STATUS=$?; %s; exit $STATUS", curlCmd, cleanupCmd))
+	if err == nil {
+		return text, nil
+	}
+
+	// Fall back to one-shot uv run (slow — loads model fresh each time)
+	repoDir := "~/mini-llm"
+	pathPrefix := "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 	pyCmd := fmt.Sprintf(
 		`python -c "from tsalign import transcribe; print(transcribe('%s', model='%s', language='%s')['text'].strip())"`,
 		remotePath, model, lang)
 	sttDir := repoDir + "/mini-tools/ts-align"
-	fullCmd := fmt.Sprintf("%s && cd %s && uv run %s; STATUS=$?; rm -f %s; exit $STATUS",
-		pathPrefix, sttDir, pyCmd, remotePath)
+	fullCmd := fmt.Sprintf("%s && cd %s && uv run %s; STATUS=$?; %s; exit $STATUS",
+		pathPrefix, sttDir, pyCmd, cleanupCmd)
 
-	text, err := ssh.Run(fullCmd)
+	text, err = ssh.Run(fullCmd)
 	if err != nil {
 		return "", fmt.Errorf("transcription failed: %w", err)
 	}
