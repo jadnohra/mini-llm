@@ -1,14 +1,19 @@
 .PHONY: build install setup check clean
 
+VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
+LDFLAGS := -ldflags "-X main.version=$(VERSION)"
+
 # Build the mini CLI + recorder (runs on your MacBook)
 build:
-	go build -o bin/mini ./cmd/mini/
+	go build $(LDFLAGS) -o bin/mini ./cmd/mini/
 	swiftc -O -o mini-tools/recorder/recorder mini-tools/recorder/recorder.swift -framework AVFoundation -framework AppKit
+	swiftc -O -o mini-tools/dictate/dictate mini-tools/dictate/dictate.swift -framework AppKit -framework Carbon
 
 # Install mini to ~/go/bin + write ~/.mini/config.yaml
 install:
-	go install ./cmd/mini/
+	go install $(LDFLAGS) ./cmd/mini/
 	swiftc -O -o mini-tools/recorder/recorder mini-tools/recorder/recorder.swift -framework AVFoundation -framework AppKit
+	swiftc -O -o mini-tools/dictate/dictate mini-tools/dictate/dictate.swift -framework AppKit -framework Carbon
 	@mkdir -p ~/.mini
 	@sed -n '/^cli:/,/^[^ ]/p' config.yaml | grep -v '^cli:' | grep -v '^[^ ]' | sed 's/^  //' > ~/.mini/config.yaml
 	@echo "  installed to ~/go/bin/mini"

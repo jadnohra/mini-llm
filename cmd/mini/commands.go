@@ -18,15 +18,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func ollamaClient() *OllamaClient {
-	t, err := ensureTunnel()
-	if err != nil {
-		// Fall back to direct connection
-		return NewOllamaClient(cfg.OllamaURL())
-	}
-	return NewOllamaClient(t.LocalURL())
-}
-func sshClient() *SSHClient { return NewSSHClient(cfg.SSHUser, cfg.Host) }
+func ollamaClient() *OllamaClient { return ollamaFromDaemon() }
+func sshClient() *SSHClient       { return sshFromDaemon() }
 
 // ── mini status ────────────────────────────────────────
 
@@ -64,12 +57,11 @@ func statusCmd() *cobra.Command {
 				result.Ollama = &ServiceStatus{Running: true, Models: len(models)}
 			}
 
-			// llama.cpp — short timeout, tunnel to its port
+			// llama.cpp — use daemon tunnel
 			fmt.Printf("  %s checking llama.cpp...\r", PulseFrame())
 			lcURL := cfg.LlamaCPPURL()
-			if lt, err := StartTunnel(cfg.SSHUser, cfg.Host, cfg.LlamaCPPPort); err == nil {
-				lcURL = lt.LocalURL()
-				defer lt.Close()
+			if state, err := ensureDaemon(); err == nil && state.LlamaCPP > 0 {
+				lcURL = fmt.Sprintf("http://127.0.0.1:%d", state.LlamaCPP)
 			}
 			lc := NewOllamaClient(lcURL)
 			lc.http.Timeout = 3 * time.Second
@@ -470,7 +462,7 @@ func sayCmd() *cobra.Command {
 			}
 			ssh := sshClient()
 
-			stop := Spinner("generating")
+			stop := Spinner("Generating")
 			data, err := ttsOnMini(ssh, text, voice, speed, readable)
 			stop()
 			if err != nil {
@@ -482,7 +474,7 @@ func sayCmd() *cobra.Command {
 				return fmt.Errorf("audio too large (%s), use 'mini tts' for long text", FmtSize(int64(len(data))))
 			}
 
-			stop = Spinner("speaking")
+			stop = Spinner("Speaking")
 			if err := playMP3(data); err != nil {
 				stop()
 				return fmt.Errorf("playback failed: %w", err)
@@ -541,7 +533,7 @@ func ttsCmd() *cobra.Command {
 
 			ssh := sshClient()
 
-			stop := Spinner("generating")
+			stop := Spinner("Generating")
 			data, err := ttsOnMini(ssh, inputText, voice, speed, readable)
 			stop()
 			if err != nil {
@@ -611,10 +603,8 @@ func dictateCmd() *cobra.Command {
 
 			switch action {
 			case "off":
-				// Send quit via pipe
 				if data, err := os.ReadFile(pidFile); err == nil {
 					pidStr := strings.TrimSpace(string(data))
-					// Check if alive
 					if c := exec.Command("kill", "-0", pidStr); c.Run() == nil {
 						if f, err := os.OpenFile(pipePath, os.O_WRONLY, 0); err == nil {
 							f.WriteString("quit\n")
@@ -633,7 +623,6 @@ func dictateCmd() *cobra.Command {
 					return fmt.Errorf("dictate binary not found at %s — compile with:\n  swiftc -O -o %s mini-tools/dictate/dictate.swift -framework AppKit -framework Carbon", bin, bin)
 				}
 
-				// Check if already running
 				if data, err := os.ReadFile(pidFile); err == nil {
 					pidStr := strings.TrimSpace(string(data))
 					if c := exec.Command("kill", "-0", pidStr); c.Run() == nil {
@@ -642,12 +631,24 @@ func dictateCmd() *cobra.Command {
 					}
 				}
 
-				// Spawn in background
-				exe, _ := os.Executable()
-				c := exec.Command(bin, "--mini-path", exe)
+				// Ensure STT server is running (don't kill warm server)
+				ssh := sshClient()
+				if health, err := ssh.Run("curl -sf --max-time 2 http://localhost:8090/health"); err != nil || health == "" {
+					sttStartServer(ssh)
+				}
+
+				// Get STT URL from daemon (tunnel is persistent)
+				sttBase, err := sttURLFromDaemon()
+				if err != nil {
+					return fmt.Errorf("cannot get STT tunnel: %w", err)
+				}
+				sttURL := sttBase + "/transcribe"
+
+				c := exec.Command(bin, "--stt-url", sttURL)
 				c.Stdout = nil
-				c.Stderr = nil
-				// Detach from parent
+				home, _ := os.UserHomeDir()
+				logF, _ := os.OpenFile(home+"/.mini/dictate.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+				c.Stderr = logF
 				c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 				if err := c.Start(); err != nil {
 					return fmt.Errorf("failed to start dictate: %w", err)
@@ -673,7 +674,7 @@ func recorderBin() string {
 // recordAudio launches the native recorder window. Returns the path to the
 // recorded audio file. Works from any context: terminal, agent, tool call.
 func recordAudio() (string, error) {
-	wavPath := fmt.Sprintf("/tmp/mini-stt-%d.wav", time.Now().UnixNano())
+	wavPath := fmt.Sprintf("/tmp/mini-stt-%d.m4a", time.Now().UnixNano())
 
 	cmd := exec.Command(recorderBin(), "--output", wavPath, "--position", "center")
 	cmd.Stderr = os.Stderr
@@ -720,12 +721,6 @@ func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (str
 	}
 	fmt.Fprintf(os.Stderr, "  server start: %dms\n", time.Since(t0).Milliseconds())
 
-	// Reset tunnel to pick up the new server
-	if sttTunnel != nil {
-		sttTunnel.Close()
-		sttTunnel = nil
-	}
-
 	t0 = time.Now()
 	text, err = sttPost(audioData, lang)
 	fmt.Fprintf(os.Stderr, "  transcribe: %dms\n", time.Since(t0).Milliseconds())
@@ -735,23 +730,27 @@ func sttOnMini(ssh *SSHClient, localPath string, model string, lang string) (str
 	return text, nil
 }
 
-// sttPost sends audio data directly to the STT server via SSH tunnel.
+// sttPost sends audio data directly to the STT server via daemon tunnel.
 func sttPost(audioData []byte, lang string) (string, error) {
-	t, err := ensureSTTTunnel()
+	t0 := time.Now()
+	sttBase, err := sttURLFromDaemon()
 	if err != nil {
 		return "", err
 	}
+	fmt.Fprintf(os.Stderr, "    daemon lookup: %dms\n", time.Since(t0).Milliseconds())
 
-	req, _ := http.NewRequest("POST", t.LocalURL()+"/transcribe", bytes.NewReader(audioData))
-	req.Header.Set("Content-Type", "audio/wav")
+	req, _ := http.NewRequest("POST", sttBase+"/transcribe", bytes.NewReader(audioData))
+	req.Header.Set("Content-Type", "audio/m4a")
 	req.Header.Set("X-Language", lang)
 
+	t1 := time.Now()
 	client := &http.Client{Timeout: 2 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
+	fmt.Fprintf(os.Stderr, "    http post: %dms (%d bytes)\n", time.Since(t1).Milliseconds(), len(audioData))
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
@@ -806,7 +805,7 @@ func sttCmd() *cobra.Command {
 				audioPath = filePath
 			} else {
 				// Record from mic
-				stop := Spinner("recording")
+				stop := Spinner("Recording")
 				var err error
 				audioPath, err = recordAudio()
 				stop()
@@ -821,7 +820,7 @@ func sttCmd() *cobra.Command {
 
 			// Transcribe on Mini
 			ssh := sshClient()
-			stop := Spinner("transcribing")
+			stop := Spinner("Transcribing")
 			text, err := sttOnMini(ssh, audioPath, model, lang)
 			stop()
 			if err != nil {

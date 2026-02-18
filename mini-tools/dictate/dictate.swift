@@ -1,32 +1,17 @@
 #!/usr/bin/env swift
 // mini-tools/dictate — Menubar dictation app for any terminal
 // Compile: swiftc -O -o dictate dictate.swift -framework AppKit -framework Carbon
-// Usage:   mini dictate (or ./dictate [--mini-path /path/to/mini])
+// Usage:   mini dictate (or ./dictate [--stt-url http://localhost:PORT/transcribe])
 // Hotkey:  Ctrl+Shift+M — records voice, transcribes on Mini, pastes into focused app
 // Requires: Accessibility permissions (for simulating paste)
 
 import AppKit
 import Carbon
 
-// ── Find mini binary ───────────────────────────────────
-
-func findMini() -> String {
-    let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
-    for path in [
-        home + "/go/bin/mini",
-        "/usr/local/bin/mini",
-    ] {
-        if FileManager.default.isExecutableFile(atPath: path) {
-            return path
-        }
-    }
-    return "mini"
-}
-
 // ── Paste simulation ───────────────────────────────────
 
 func simulatePaste() {
-    usleep(300_000) // 300ms for focus to return
+    usleep(100_000) // 100ms settle time
     let source = CGEventSource(stateID: .hidSystemState)
     let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
     keyDown?.flags = .maskCommand
@@ -58,12 +43,12 @@ func findRecorder() -> String? {
 
 class DictateApp: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
-    let miniPath: String
+    let sttURL: String
     var isRunning = false
     var hotKeyRef: EventHotKeyRef?
 
-    init(miniPath: String) {
-        self.miniPath = miniPath
+    init(sttURL: String) {
+        self.sttURL = sttURL
         super.init()
     }
 
@@ -161,56 +146,95 @@ class DictateApp: NSObject, NSApplicationDelegate {
         guard !isRunning else { return }
         isRunning = true
         updateIcon(state: "recording")
-        print("dictate: starting...")
+        let dt0 = DispatchTime.now()
 
         guard let recorderPath = findRecorder() else {
-            print("dictate: recorder binary not found")
+            fputs("dictate: recorder binary not found\n", stderr)
             isRunning = false
             updateIcon(state: "idle")
             return
         }
 
-        let wavPath = "/tmp/mini-dictate-\(Int(Date().timeIntervalSince1970 * 1000)).wav"
+        let audioPath = "/tmp/mini-dictate-\(Int(Date().timeIntervalSince1970 * 1000)).m4a"
 
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             defer {
-                try? FileManager.default.removeItem(atPath: wavPath)
+                try? FileManager.default.removeItem(atPath: audioPath)
                 DispatchQueue.main.async {
                     self.isRunning = false
                     self.updateIcon(state: "idle")
                 }
             }
 
-            // Recorder handles everything: record → transcribe → output text
+            // Step 1: Record only — no transcription, exits instantly on Enter
             let rec = Process()
             rec.executableURL = URL(fileURLWithPath: recorderPath)
-            rec.arguments = ["--output", wavPath, "--mini-path", miniPath, "--copy"]
-            let pipe = Pipe()
-            rec.standardOutput = pipe
-            rec.standardError = FileHandle.nullDevice
+            rec.arguments = ["--output", audioPath]
+            rec.standardOutput = FileHandle.nullDevice
+            rec.standardError = FileHandle.standardError
 
             do { try rec.run() } catch {
-                print("dictate: failed to launch recorder: \(error)")
+                fputs("dictate: failed to launch recorder: \(error)\n", stderr)
                 return
             }
             rec.waitUntilExit()
+            let dt1 = DispatchTime.now()
+            fputs(String(format: "dictate: recorded: %dms (status %d)\n", (dt1.uptimeNanoseconds - dt0.uptimeNanoseconds) / 1_000_000, rec.terminationStatus), stderr)
 
             if rec.terminationStatus != 0 {
-                print("dictate: cancelled")
+                fputs("dictate: cancelled\n", stderr)
                 return
             }
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let text = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // Recorder exited — focus has returned to the previous app
+
+            // Step 2: Transcribe via curl (fast, no URLSession overhead)
+            DispatchQueue.main.async { self.updateIcon(state: "transcribing") }
+
+            let curl = Process()
+            curl.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+            curl.arguments = [
+                "-sf", "--max-time", "120",
+                "-H", "Content-Type: audio/m4a",
+                "-H", "X-Language: en",
+                "--data-binary", "@\(audioPath)",
+                sttURL,
+            ]
+            let curlPipe = Pipe()
+            curl.standardOutput = curlPipe
+            curl.standardError = FileHandle.nullDevice
+
+            var text = ""
+            do {
+                try curl.run()
+                curl.waitUntilExit()
+                if curl.terminationStatus == 0 {
+                    let data = curlPipe.fileHandleForReading.readDataToEndOfFile()
+                    text = String(data: data, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                }
+            } catch {
+                fputs("dictate: curl failed: \(error)\n", stderr)
+                return
+            }
+            let dt2 = DispatchTime.now()
+            fputs(String(format: "dictate: transcribed: %dms \"%@\"\n", (dt2.uptimeNanoseconds - dt1.uptimeNanoseconds) / 1_000_000, text), stderr)
 
             if text.isEmpty {
-                print("dictate: empty transcription")
+                fputs("dictate: empty transcription\n", stderr)
                 return
             }
 
-            print("dictate: \"\(text)\" — pasting...")
-            DispatchQueue.main.async { simulatePaste() }
+            // Step 3: Clipboard + paste (focus is already on the terminal)
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+
+            DispatchQueue.main.async {
+                simulatePaste()
+                let dt3 = DispatchTime.now()
+                fputs(String(format: "dictate: TOTAL: %dms\n", (dt3.uptimeNanoseconds - dt0.uptimeNanoseconds) / 1_000_000), stderr)
+            }
         }
     }
 
@@ -301,15 +325,20 @@ signal(SIGTERM) { _ in cleanup(); exit(0) }
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
-var miniPath = findMini()
+var sttURL = ""
 let args = CommandLine.arguments
 for i in 1..<args.count {
-    if (args[i] == "--mini-path" || args[i] == "-m") && i + 1 < args.count {
-        miniPath = args[i + 1]
+    if args[i] == "--stt-url" && i + 1 < args.count {
+        sttURL = args[i + 1]
     }
 }
 
-let delegate = DictateApp(miniPath: miniPath)
+if sttURL.isEmpty {
+    fputs("dictate: --stt-url is required\n", stderr)
+    exit(1)
+}
+
+let delegate = DictateApp(sttURL: sttURL)
 app.delegate = delegate
 startPipeListener(app: delegate)
 app.run()

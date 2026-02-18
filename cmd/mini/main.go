@@ -7,29 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	cfg       Config
-	tunnel    *SSHTunnel
-	sttTunnel *SSHTunnel
-)
-
-func ensureTunnel() (*SSHTunnel, error) {
-	if tunnel != nil {
-		return tunnel, nil
-	}
-	var err error
-	tunnel, err = StartTunnel(cfg.SSHUser, cfg.Host, cfg.OllamaPort)
-	return tunnel, err
-}
-
-func ensureSTTTunnel() (*SSHTunnel, error) {
-	if sttTunnel != nil {
-		return sttTunnel, nil
-	}
-	var err error
-	sttTunnel, err = StartTunnel(cfg.SSHUser, cfg.Host, 8090)
-	return sttTunnel, err
-}
+var cfg Config
+var version = "dev" // set by -ldflags at build time
 
 func main() {
 	cfg = LoadConfig()
@@ -50,17 +29,9 @@ func main() {
 	root.AddCommand(ttsCmd())
 	root.AddCommand(sttCmd())
 	root.AddCommand(dictateCmd())
+	root.AddCommand(daemonCmd())
 
 	err := root.Execute()
-
-	// Clean up tunnels
-	if tunnel != nil {
-		tunnel.Close()
-	}
-	if sttTunnel != nil {
-		sttTunnel.Close()
-	}
-
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

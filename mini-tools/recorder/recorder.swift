@@ -1,11 +1,21 @@
 #!/usr/bin/env swift
 // mini-tools/recorder — Terminal-style voice recorder for mini stt
 // Compile: swiftc -O -o recorder recorder.swift -framework AVFoundation -framework AppKit
-// Usage:   ./recorder [--position center|mouse] [--output /tmp/out.wav]
-// Returns: Prints "done" or "cancel" to stdout
+// Usage:   ./recorder [--position center|mouse] [--output /tmp/out.m4a] [--stt-url URL]
+// Returns: Prints transcribed text (if --stt-url) or "done"/"cancel" to stdout
 
 import AVFoundation
 import AppKit
+
+// NSApp.stop() only sets a flag — the run loop won't check it until it
+// receives a real event. Post a dummy event to wake it up immediately.
+func appStop() {
+    NSApp.stop(nil)
+    let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero,
+        modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+        subtype: 0, data1: 0, data2: 0)
+    if let event = event { NSApp.postEvent(event, atStart: true) }
+}
 
 // ── Colors ─────────────────────────────────────────────
 
@@ -13,10 +23,6 @@ struct Term {
     static let bg       = NSColor(srgbRed: 1.0, green: 0.98, blue: 0.94, alpha: 1.0) // warm cream
     static let fg       = NSColor(srgbRed: 0.15, green: 0.15, blue: 0.17, alpha: 1.0)
     static let dim      = NSColor(srgbRed: 0.55, green: 0.55, blue: 0.58, alpha: 1.0)
-    static let green    = NSColor(srgbRed: 0.18, green: 0.60, blue: 0.35, alpha: 1.0)
-    static let red      = NSColor(srgbRed: 0.88, green: 0.22, blue: 0.22, alpha: 1.0)
-    static let amber    = NSColor(srgbRed: 0.80, green: 0.60, blue: 0.15, alpha: 1.0)
-    static let brand    = NSColor(srgbRed: 0.40, green: 0.40, blue: 0.43, alpha: 1.0)
     static let font     = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     static let fontBold = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
     static let fontSm   = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -28,6 +34,7 @@ struct Term {
 class AudioRecorder: NSObject {
     private var engine = AVAudioEngine()
     private var audioFile: AVAudioFile?
+    private let encodingQueue = DispatchQueue(label: "mini.audio-encode", qos: .userInitiated)
     var onLevel: ((Float) -> Void)?
     var outputPath: String
 
@@ -36,23 +43,34 @@ class AudioRecorder: NSObject {
         super.init()
     }
 
+    private func copyBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else {
+            return nil
+        }
+        copy.frameLength = buffer.frameLength
+        if let src = buffer.floatChannelData?[0], let dst = copy.floatChannelData?[0] {
+            memcpy(dst, src, Int(buffer.frameLength) * MemoryLayout<Float>.stride)
+        }
+        return copy
+    }
+
     func start() throws {
         let url = URL(fileURLWithPath: outputPath)
         let inputNode = engine.inputNode
         let nativeFormat = inputNode.outputFormat(forBus: 0)
 
         let fileSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: nativeFormat.sampleRate,
             AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
+            AVEncoderBitRateKey: 64000,
         ]
         audioFile = try AVAudioFile(forWriting: url, settings: fileSettings)
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buffer, _ in
-            guard let self = self, let file = self.audioFile else { return }
+            guard let self = self else { return }
 
+            // RMS — just math, real-time safe
             let channelData = buffer.floatChannelData?[0]
             let frameLength = Int(buffer.frameLength)
             var rms: Float = 0
@@ -62,7 +80,12 @@ class AudioRecorder: NSObject {
             }
             DispatchQueue.main.async { self.onLevel?(rms) }
 
-            do { try file.write(from: buffer) } catch {}
+            // Copy buffer and dispatch encoding off real-time thread
+            guard let copy = self.copyBuffer(buffer) else { return }
+            self.encodingQueue.async { [weak self] in
+                guard let file = self?.audioFile else { return }
+                do { try file.write(from: copy) } catch {}
+            }
         }
 
         engine.prepare()
@@ -72,48 +95,61 @@ class AudioRecorder: NSObject {
     func stop() {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        audioFile = nil
+        // Flush all pending writes before closing
+        encodingQueue.sync {
+            audioFile = nil
+        }
     }
 }
 
-// ── Waveform View (terminal block characters) ──────────
+// ── Waveform View (Core Graphics bars) ──────────────────
 
 class WaveformView: NSView {
-    private let blocks: [Character] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-    private var levels: [Float] = Array(repeating: 0, count: 36)
+    private let barCount = 32
+    private var levels: [Float]
     private var index = 0
-    private var peak: Float = 0.001 // adaptive peak for normalization
+    private var peak: Float = 0.005
+
+    override init(frame: NSRect) {
+        levels = Array(repeating: 0, count: 32)
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+    required init?(coder: NSCoder) { fatalError() }
 
     func pushLevel(_ l: Float) {
-        // Track peak with slow decay for adaptive normalization
         if l > peak { peak = l }
-        peak = max(peak * 0.995, 0.001) // decay toward silence
-
-        levels[index % levels.count] = l
+        peak = max(peak * 0.993, 0.005)
+        levels[index % barCount] = l
         index += 1
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        Term.bg.setFill()
-        NSBezierPath.fill(bounds)
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.clear(bounds)
 
-        var waveform = ""
-        for i in 0..<levels.count {
-            let idx = (index + i) % levels.count
-            // Normalize against adaptive peak, apply log scale for better dynamics
+        let gap: CGFloat = 1.5
+        let barW = (bounds.width - gap * CGFloat(barCount - 1)) / CGFloat(barCount)
+        let maxH = bounds.height
+
+        for i in 0..<barCount {
+            let idx = (index + i) % barCount
             let raw = levels[idx] / peak
-            let val = min(log10(1 + raw * 9), 1.0) // log scale: quiet sounds more visible
-            let blockIdx = Int(val * Float(blocks.count - 1))
-            waveform.append(blocks[blockIdx])
-        }
+            let val = CGFloat(min(log10(1 + raw * 9), 1.0))
+            let h = max(val * maxH, 2) // minimum 2px so bars are always visible
+            let x = CGFloat(i) * (barW + gap)
+            let y = (maxH - h) / 2 // center vertically
 
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: Term.font,
-            .foregroundColor: Term.green,
-        ]
-        let str = NSAttributedString(string: waveform, attributes: attrs)
-        str.draw(at: NSPoint(x: 0, y: (bounds.height - 16) / 2))
+            let alpha = 0.35 + val * 0.65 // dim when quiet, bright when loud
+            ctx.setFillColor(Term.fg.withAlphaComponent(alpha).cgColor)
+
+            let rect = CGRect(x: x, y: y, width: barW, height: h)
+            let path = CGPath(roundedRect: rect, cornerWidth: barW / 2, cornerHeight: barW / 2, transform: nil)
+            ctx.addPath(path)
+            ctx.fillPath()
+        }
     }
 }
 
@@ -175,7 +211,7 @@ class RecorderWindow: NSObject, NSWindowDelegate {
         dotLabel = NSTextField(labelWithString: "●")
         dotLabel.frame = NSRect(x: pad, y: row1Y, width: 16, height: 16)
         dotLabel.font = Term.fontSm
-        dotLabel.textColor = Term.red
+        dotLabel.textColor = Term.fg
 
         // Time
         timeLabel = NSTextField(labelWithString: "00:00")
@@ -261,7 +297,7 @@ class RecorderWindow: NSObject, NSWindowDelegate {
             startTimer()
         } catch {
             dotLabel.stringValue = "✕ err"
-            dotLabel.textColor = Term.red
+            dotLabel.textColor = Term.fg
             hintLabel.stringValue = error.localizedDescription
         }
     }
@@ -276,7 +312,7 @@ class RecorderWindow: NSObject, NSWindowDelegate {
         pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             let on = Int(Date().timeIntervalSince1970 * 2) % 2 == 0
-            self.dotLabel.textColor = on ? Term.red : Term.red.withAlphaComponent(0.3)
+            self.dotLabel.textColor = on ? Term.fg : Term.fg.withAlphaComponent(0.3)
         }
     }
 
@@ -300,66 +336,110 @@ class RecorderWindow: NSObject, NSWindowDelegate {
         elapsedTimer = nil
     }
 
-    var miniPath: String?
+    var sttURL: String?
     var copyToClipboard = false
-
-    var statusText = "transcribing"
+    var statusText = "Transcribing"
 
     @objc func doneClicked() {
+        let tStart = DispatchTime.now()
         result = "done"
         stopRecording()
+        let tStop = DispatchTime.now()
+        fputs(String(format: "  stop recording: %dms\n", (tStop.uptimeNanoseconds - tStart.uptimeNanoseconds) / 1_000_000), stderr)
 
-        if let mini = miniPath {
-            // Transcribe in-place — keep window open
+        if let url = sttURL {
             showTranscribing()
-            DispatchQueue.global(qos: .userInitiated).async { [self] in
-                let stt = Process()
-                stt.executableURL = URL(fileURLWithPath: mini)
-                var args = ["stt", "--file", recorder.outputPath]
-                if copyToClipboard { args.append("--copy") }
-                stt.arguments = args
-                let pipe = Pipe()
-                stt.standardOutput = pipe
-                // Read stderr to detect cold start status
-                let errPipe = Pipe()
-                stt.standardError = errPipe
 
-                do { try stt.run() } catch {
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                let tQueued = DispatchTime.now()
+                fputs(String(format: "  dispatch start: %dms\n", (tQueued.uptimeNanoseconds - tStop.uptimeNanoseconds) / 1_000_000), stderr)
+                let t0 = DispatchTime.now()
+
+                // Quick health check — only to update UI status
+                let baseURL = url.replacingOccurrences(of: "/transcribe", with: "")
+                let hc = Process()
+                hc.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+                hc.arguments = ["-sf", "--max-time", "1", baseURL + "/health"]
+                let hcPipe = Pipe()
+                hc.standardOutput = hcPipe
+                hc.standardError = FileHandle.nullDevice
+                if let _ = try? hc.run() {
+                    hc.waitUntilExit()
+                    let hcData = hcPipe.fileHandleForReading.readDataToEndOfFile()
+                    if let status = String(data: hcData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       status == "idle" {
+                        DispatchQueue.main.async { self.statusText = "Loading model" }
+                    }
+                }
+                let t1 = DispatchTime.now()
+                fputs(String(format: "  health check: %dms\n", (t1.uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000), stderr)
+
+                let t2 = DispatchTime.now()
+
+                var text = ""
+                var error: String?
+
+                // Use curl — URLSession adds seconds of overhead on localhost HTTP
+                let curl = Process()
+                curl.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+                curl.arguments = [
+                    "-sf", "--max-time", "120",
+                    "-H", "Content-Type: audio/m4a",
+                    "-H", "X-Language: en",
+                    "--data-binary", "@\(recorder.outputPath)",
+                    url,
+                ]
+                let curlPipe = Pipe()
+                curl.standardOutput = curlPipe
+                curl.standardError = FileHandle.nullDevice
+                do {
+                    try curl.run()
+                    curl.waitUntilExit()
+                    if curl.terminationStatus == 0 {
+                        let data = curlPipe.fileHandleForReading.readDataToEndOfFile()
+                        text = String(data: data, encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    } else {
+                        error = "curl failed (status \(curl.terminationStatus))"
+                    }
+                } catch let err {
+                    error = err.localizedDescription
+                }
+                let t3 = DispatchTime.now()
+                fputs(String(format: "  http post: %dms\n", (t3.uptimeNanoseconds - t2.uptimeNanoseconds) / 1_000_000), stderr)
+
+                if let error = error {
+                    fputs(String(format: "  error: %@ (total: %dms)\n", error, (DispatchTime.now().uptimeNanoseconds - tStart.uptimeNanoseconds) / 1_000_000), stderr)
                     DispatchQueue.main.async {
-                        self.showError("stt failed")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { NSApp.stop(nil) }
+                        self.showError(error)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { appStop() }
                     }
                     return
                 }
 
-                // Read stderr in a dedicated thread (readabilityHandler is unreliable with waitUntilExit)
-                let errHandle = errPipe.fileHandleForReading
-                DispatchQueue.global(qos: .utility).async { [weak self] in
-                    while true {
-                        let chunk = errHandle.availableData
-                        if chunk.isEmpty { break } // EOF
-                        guard let text = String(data: chunk, encoding: .utf8) else { continue }
-                        if text.contains("server not running") {
-                            DispatchQueue.main.async { self?.statusText = "loading model" }
-                        } else if text.contains("transcribe:") {
-                            DispatchQueue.main.async { self?.statusText = "transcribing" }
-                        }
-                    }
+                let t4 = DispatchTime.now()
+                if !text.isEmpty {
+                    print(text)
                 }
 
-                stt.waitUntilExit()
+                // Clipboard + stop on main thread to ensure pasteboard write completes
+                let shouldCopy = self.copyToClipboard && !text.isEmpty
+                let capturedText = text
+                DispatchQueue.main.sync {
+                    if shouldCopy {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(capturedText, forType: .string)
+                    }
+                }
+                let t5 = DispatchTime.now()
+                fputs(String(format: "  clipboard: %dms\n", (t5.uptimeNanoseconds - t4.uptimeNanoseconds) / 1_000_000), stderr)
+                fputs(String(format: "  TOTAL: %dms\n", (t5.uptimeNanoseconds - tStart.uptimeNanoseconds) / 1_000_000), stderr)
 
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let text = String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                // Print text to stdout for the caller
-                if !text.isEmpty { print(text) }
-
-                DispatchQueue.main.async { NSApp.stop(nil) }
+                DispatchQueue.main.async { appStop() }
             }
         } else {
-            NSApp.stop(nil)
+            appStop()
         }
     }
 
@@ -374,7 +454,7 @@ class RecorderWindow: NSObject, NSWindowDelegate {
 
         let w = window.frame.width
         let h = window.frame.height
-        let transLabel = NSTextField(labelWithString: "⠋ transcribing")
+        let transLabel = NSTextField(labelWithString: "⠋ Transcribing")
         transLabel.frame = NSRect(x: 0, y: (h - 18) / 2, width: w, height: 18)
         transLabel.alignment = .center
         transLabel.font = Term.font
@@ -392,29 +472,29 @@ class RecorderWindow: NSObject, NSWindowDelegate {
 
     func showError(_ msg: String) {
         dotLabel.stringValue = "✕ err"
-        dotLabel.textColor = Term.red
+        dotLabel.textColor = Term.fg
         hintLabel.stringValue = msg
     }
 
     @objc func cancelClicked() {
         result = "cancel"
         stopRecording()
-        NSApp.stop(nil)
+        appStop()
     }
 
     func windowWillClose(_ notification: Notification) {
         result = "cancel"
         stopRecording()
-        NSApp.stop(nil)
+        appStop()
     }
 }
 
 // ── Main ────────────────────────────────────────────────
 
 struct RecorderConfig {
-    var output = "/tmp/mini-stt-recording.wav"
+    var output = "/tmp/mini-stt-recording.m4a"
     var position = "center"
-    var miniPath: String? = nil
+    var sttURL: String? = nil
     var copy = false
 }
 
@@ -428,8 +508,8 @@ func parseArgs() -> RecorderConfig {
             i += 1; if i < args.count { cfg.output = args[i] }
         case "--position", "-p":
             i += 1; if i < args.count { cfg.position = args[i] }
-        case "--mini-path":
-            i += 1; if i < args.count { cfg.miniPath = args[i] }
+        case "--stt-url":
+            i += 1; if i < args.count { cfg.sttURL = args[i] }
         case "--copy":
             cfg.copy = true
         default: break
@@ -444,7 +524,7 @@ app.setActivationPolicy(.accessory)
 
 let config = parseArgs()
 let recorderWindow = RecorderWindow(outputPath: config.output, position: config.position)
-recorderWindow.miniPath = config.miniPath
+recorderWindow.sttURL = config.sttURL
 recorderWindow.copyToClipboard = config.copy
 let action = recorderWindow.run()
 

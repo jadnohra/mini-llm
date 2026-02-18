@@ -101,9 +101,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         lang = self.headers.get("X-Language", "en")
+        content_type = self.headers.get("Content-Type", "audio/wav")
+        suffix = ".m4a" if "m4a" in content_type else ".wav"
         audio_data = self.rfile.read(content_length)
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(audio_data)
             tmp_path = tmp.name
 
