@@ -102,16 +102,16 @@ class AudioRecorder: NSObject {
     }
 }
 
-// ── Waveform View (Core Graphics bars) ──────────────────
+// ── Waveform View (oscilloscope line) ───────────────────
 
 class WaveformView: NSView {
-    private let barCount = 32
+    private let sampleCount = 48
     private var levels: [Float]
     private var index = 0
     private var peak: Float = 0.005
 
     override init(frame: NSRect) {
-        levels = Array(repeating: 0, count: 32)
+        levels = Array(repeating: 0, count: 48)
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -120,36 +120,37 @@ class WaveformView: NSView {
 
     func pushLevel(_ l: Float) {
         if l > peak { peak = l }
-        peak = max(peak * 0.993, 0.005)
-        levels[index % barCount] = l
+        peak = max(peak * 0.98, 0.005)
+        levels[index % sampleCount] = l
         index += 1
         needsDisplay = true
     }
+
+    private let steps = 8 // quantization levels
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         ctx.clear(bounds)
 
-        let gap: CGFloat = 1.5
-        let barW = (bounds.width - gap * CGFloat(barCount - 1)) / CGFloat(barCount)
         let maxH = bounds.height
+        let dx = bounds.width / CGFloat(sampleCount)
 
-        for i in 0..<barCount {
-            let idx = (index + i) % barCount
+        // Step waveform: horizontal + vertical segments (sample-and-hold)
+        ctx.beginPath()
+        for i in 0..<sampleCount {
+            let idx = (index + i) % sampleCount
             let raw = levels[idx] / peak
             let val = CGFloat(min(log10(1 + raw * 9), 1.0))
-            let h = max(val * maxH, 2) // minimum 2px so bars are always visible
-            let x = CGFloat(i) * (barW + gap)
-            let y = (maxH - h) / 2 // center vertically
-
-            let alpha = 0.35 + val * 0.65 // dim when quiet, bright when loud
-            ctx.setFillColor(Term.fg.withAlphaComponent(alpha).cgColor)
-
-            let rect = CGRect(x: x, y: y, width: barW, height: h)
-            let path = CGPath(roundedRect: rect, cornerWidth: barW / 2, cornerHeight: barW / 2, transform: nil)
-            ctx.addPath(path)
-            ctx.fillPath()
+            let step = CGFloat(Int(val * CGFloat(steps))) / CGFloat(steps)
+            let y = step * (maxH - 1) + 0.5
+            let x = CGFloat(i) * dx
+            if i == 0 { ctx.move(to: CGPoint(x: x, y: y)) }
+            else { ctx.addLine(to: CGPoint(x: x, y: y)) } // vertical
+            ctx.addLine(to: CGPoint(x: x + dx, y: y))      // horizontal
         }
+        ctx.setStrokeColor(Term.fg.withAlphaComponent(0.6).cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.strokePath()
     }
 }
 
