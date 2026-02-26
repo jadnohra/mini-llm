@@ -5,3 +5,8 @@ __pycache__/
 .DS_Store
 bin/
 .venv/
+/mini
+*.dSYM/
+mini-tools/recorder/test
+mini-tools/dictate/dictate
+mini-tools/recorder/recorder

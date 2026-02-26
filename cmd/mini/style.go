@@ -12,17 +12,17 @@ import (
 
 // Terminus palette — muted 256-color, no emoji
 var (
-	Tree     = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	Path     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	Info     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	Help     = lipgloss.NewStyle().Foreground(lipgloss.Color("236"))
+	Tree     = lipgloss.NewStyle().Foreground(lipgloss.Color("247"))
+	Path     = lipgloss.NewStyle().Foreground(lipgloss.Color("253"))
+	Info     = lipgloss.NewStyle().Foreground(lipgloss.Color("249"))
+	Help     = lipgloss.NewStyle().Foreground(lipgloss.Color("247"))
 	Selected = lipgloss.NewStyle().Bold(true)
 	Ready    = lipgloss.NewStyle().Foreground(lipgloss.Color("70"))
 	Blocked  = lipgloss.NewStyle().Foreground(lipgloss.Color("131"))
-	Done     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	Done     = lipgloss.NewStyle().Foreground(lipgloss.Color("249"))
 	Active   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	Dim      = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	Label    = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(16)
+	Dim      = lipgloss.NewStyle().Foreground(lipgloss.Color("247"))
+	Label    = lipgloss.NewStyle().Foreground(lipgloss.Color("253")).Width(16)
 )
 
 // Pulse star animation frames

@@ -28,8 +28,29 @@ type OllamaTagsResp struct {
 }
 
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+}
+
+type ToolCall struct {
+	Function ToolCallFunction `json:"function"`
+}
+
+type ToolCallFunction struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+type ToolDef struct {
+	Type     string       `json:"type"`
+	Function ToolDefFunc  `json:"function"`
+}
+
+type ToolDefFunc struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 type ChatRequest struct {
@@ -37,6 +58,7 @@ type ChatRequest struct {
 	Messages []ChatMessage `json:"messages"`
 	Stream   bool          `json:"stream"`
 	Options  ChatOptions   `json:"options,omitempty"`
+	Tools    []ToolDef     `json:"tools,omitempty"`
 }
 
 type ChatOptions struct {
@@ -69,7 +91,18 @@ type ChatStreamChunk struct {
 	EvalDuration       int64 `json:"eval_duration,omitempty"`
 }
 
+// ── LLM client interface ──────────────────────────────
+
+// LLMClient is the interface for chat-capable backends.
+type LLMClient interface {
+	Chat(req ChatRequest) (*ChatResponse, error)
+	ChatStream(req ChatRequest, w io.Writer) (*ChatStreamChunk, error)
+	ChatStreamCb(ctx context.Context, req ChatRequest, w io.Writer, onFirstToken func()) (*ChatStreamChunk, error)
+}
+
 // ── Ollama client ──────────────────────────────────────
+
+var _ LLMClient = (*OllamaClient)(nil)
 
 type OllamaClient struct {
 	baseURL string
@@ -91,7 +124,7 @@ func NewOllamaClient(baseURL string) *OllamaClient {
 	}
 	return &OllamaClient{
 		baseURL: baseURL,
-		http:    &http.Client{Timeout: 10 * time.Minute, Transport: transport},
+		http:    &http.Client{Transport: transport}, // no global timeout; context cancellation handles abort
 	}
 }
 
@@ -142,10 +175,24 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 
 // ChatStream sends a request and streams tokens to the writer
 func (c *OllamaClient) ChatStream(req ChatRequest, w io.Writer) (*ChatStreamChunk, error) {
+	return c.ChatStreamCb(context.Background(), req, w, nil)
+}
+
+// ChatStreamCb streams a chat response with a cancellable context.
+// onFirstToken is called once before writing the first content chunk
+// (useful for stopping a spinner).  Cancelling ctx closes the HTTP
+// connection, which makes Ollama stop generating server-side.
+func (c *OllamaClient) ChatStreamCb(ctx context.Context, req ChatRequest, w io.Writer, onFirstToken func()) (*ChatStreamChunk, error) {
 	req.Stream = true
 	body, _ := json.Marshal(req)
 
-	resp, err := c.http.Post(c.baseURL+"/api/chat", "application/json", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
@@ -158,16 +205,24 @@ func (c *OllamaClient) ChatStream(req ChatRequest, w io.Writer) (*ChatStreamChun
 
 	dec := json.NewDecoder(resp.Body)
 	var final ChatStreamChunk
+	first := true
 
 	for {
 		var chunk ChatStreamChunk
 		if err := dec.Decode(&chunk); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			if err == io.EOF {
 				break
 			}
 			return nil, err
 		}
 		if chunk.Message.Content != "" {
+			if first && onFirstToken != nil {
+				onFirstToken()
+				first = false
+			}
 			fmt.Fprint(w, chunk.Message.Content)
 		}
 		if chunk.Done {
@@ -213,13 +268,17 @@ func (c *OllamaClient) Delete(model string) error {
 // sshCmd builds an ssh exec.Cmd with multiplexing and any extra flags.
 // The first connection authenticates and becomes the ControlMaster; all
 // subsequent connections (from any process, terminal, or agent) reuse it.
-func sshCmd(user, host string, extra []string, command ...string) *exec.Cmd {
+// If keyFile is non-empty, it is used as the identity file (bypasses agent).
+func sshCmd(user, host, keyFile string, extra []string, command ...string) *exec.Cmd {
 	args := []string{
 		"-o", "ConnectTimeout=5",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPath=/tmp/mini-ssh-%C",
 		"-o", "ControlPersist=10m",
+	}
+	if keyFile != "" {
+		args = append(args, "-o", "IdentityFile="+keyFile, "-o", "IdentitiesOnly=yes")
 	}
 	args = append(args, extra...)
 	args = append(args, fmt.Sprintf("%s@%s", user, host))
@@ -235,7 +294,7 @@ type SSHTunnel struct {
 }
 
 // StartTunnel opens ssh -L localPort:localhost:remotePort user@host -N
-func StartTunnel(user, host string, remotePort int) (*SSHTunnel, error) {
+func StartTunnel(user, host, keyFile string, remotePort int) (*SSHTunnel, error) {
 	// Find a free local port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -245,7 +304,7 @@ func StartTunnel(user, host string, remotePort int) (*SSHTunnel, error) {
 	ln.Close()
 
 	forward := fmt.Sprintf("%d:localhost:%d", localPort, remotePort)
-	cmd := sshCmd(user, host, []string{
+	cmd := sshCmd(user, host, keyFile, []string{
 		"-o", "ExitOnForwardFailure=yes",
 		"-N", "-L", forward,
 	})
@@ -284,16 +343,17 @@ func (t *SSHTunnel) Close() {
 // ── SSH client ─────────────────────────────────────────
 
 type SSHClient struct {
-	user string
-	host string
+	user    string
+	host    string
+	keyFile string
 }
 
-func NewSSHClient(user, host string) *SSHClient {
-	return &SSHClient{user: user, host: host}
+func NewSSHClient(user, host, keyFile string) *SSHClient {
+	return &SSHClient{user: user, host: host, keyFile: keyFile}
 }
 
 func (s *SSHClient) Run(command string) (string, error) {
-	cmd := sshCmd(s.user, s.host, nil, command)
+	cmd := sshCmd(s.user, s.host, s.keyFile, nil, command)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -309,7 +369,7 @@ func (s *SSHClient) Run(command string) (string, error) {
 }
 
 func (s *SSHClient) RunInteractive(command string) error {
-	cmd := sshCmd(s.user, s.host, []string{"-t"}, command)
+	cmd := sshCmd(s.user, s.host, s.keyFile, []string{"-t"}, command)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -317,7 +377,7 @@ func (s *SSHClient) RunInteractive(command string) error {
 }
 
 func (s *SSHClient) RunBytes(command string) ([]byte, error) {
-	cmd := sshCmd(s.user, s.host, nil, command)
+	cmd := sshCmd(s.user, s.host, s.keyFile, nil, command)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -338,12 +398,16 @@ func (s *SSHClient) ReadFile(path string) (string, error) {
 
 func (s *SSHClient) Push(local, remote string) error {
 	target := fmt.Sprintf("%s@%s:%s", s.user, s.host, remote)
-	cmd := exec.Command("scp",
+	args := []string{
 		"-o", "ControlMaster=auto",
 		"-o", "ControlPath=/tmp/mini-ssh-%C",
 		"-o", "ControlPersist=10m",
-		"-r", local, target,
-	)
+	}
+	if s.keyFile != "" {
+		args = append(args, "-o", "IdentityFile="+s.keyFile, "-o", "IdentitiesOnly=yes")
+	}
+	args = append(args, "-r", local, target)
+	cmd := exec.Command("scp", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

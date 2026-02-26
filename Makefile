@@ -15,7 +15,11 @@ install:
 	swiftc -O -o mini-tools/recorder/recorder mini-tools/recorder/recorder.swift -framework AVFoundation -framework AppKit
 	swiftc -O -o mini-tools/dictate/dictate mini-tools/dictate/dictate.swift -framework AppKit -framework Carbon
 	@mkdir -p ~/.mini
-	@sed -n '/^cli:/,/^[^ ]/p' config.yaml | grep -v '^cli:' | grep -v '^[^ ]' | sed 's/^  //' > ~/.mini/config.yaml
+	@sed -n '/^cli:/,/^[^ ]/p' config.yaml | grep -v '^cli:' | grep -v '^[^ ]' | sed 's/^  //' > ~/.mini/config.yaml.new
+	@if [ -f ~/.mini/config.yaml ]; then \
+		awk -F: 'NR==FNR{keys[$$1];next} !($$1 in keys)' ~/.mini/config.yaml.new ~/.mini/config.yaml >> ~/.mini/config.yaml.new; \
+	fi
+	@mv ~/.mini/config.yaml.new ~/.mini/config.yaml
 	@echo "  installed to ~/go/bin/mini"
 	@echo "  config written to ~/.mini/config.yaml"
 

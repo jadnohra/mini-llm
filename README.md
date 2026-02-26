@@ -221,9 +221,24 @@ The CLI reads from `config.yaml` (the `cli:` section) and `~/.mini/config.yaml`.
 |---------|-------------|
 | `host` | hostname of the Mac Mini |
 | `ssh_user` | SSH username |
+| `ssh_key` | path to SSH private key (e.g. `~/.ssh/id_ed25519`) |
 | `ollama_port` | Ollama port |
 | `llamacpp_port` | llama.cpp port |
 | `default_model` | model for `mini ask` |
+
+If `ssh_key` is set, the CLI passes it directly to every SSH and SCP call, so it works even when the SSH agent is empty (after a reboot or long idle).
+
+For persistent key management across reboots, add this to `~/.ssh/config`:
+
+```
+Host your-mac-mini.local
+    IdentityFile ~/.ssh/your_key
+    AddKeysToAgent yes
+    UseKeychain yes
+    IdentitiesOnly yes
+```
+
+`AddKeysToAgent` loads the key into the agent on first use. `UseKeychain` stores the passphrase in macOS Keychain so it survives reboots. `IdentitiesOnly` prevents SSH from trying other keys and hitting "too many authentication failures".
 
 ## Mini-tools
 

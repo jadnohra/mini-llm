@@ -3,12 +3,14 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -20,6 +22,39 @@ import (
 
 func ollamaClient() *OllamaClient { return ollamaFromDaemon() }
 func sshClient() *SSHClient       { return sshFromDaemon() }
+
+// parseProvider splits "provider/model" into (provider, cleanModel).
+// No prefix defaults to "ollama" for backward compat.
+func parseProvider(model string) (provider, cleanModel string) {
+	idx := strings.Index(model, "/")
+	if idx < 0 {
+		return "ollama", model
+	}
+	prefix := model[:idx]
+	switch prefix {
+	case "hf":
+		return "hf", model[idx+1:]
+	case "ollama":
+		return "ollama", model[idx+1:]
+	default:
+		return "ollama", model
+	}
+}
+
+// llmClient returns the right LLMClient for the model string,
+// plus the cleaned model name (provider prefix stripped).
+func llmClient(model string) (LLMClient, string, error) {
+	provider, cleanModel := parseProvider(model)
+	switch provider {
+	case "hf":
+		if cfg.HFToken == "" {
+			return nil, "", fmt.Errorf("hf_token not set in config — add hf_token to ~/.mini/config.yaml")
+		}
+		return NewHFClient(cfg.HFToken), cleanModel, nil
+	default:
+		return ollamaClient(), cleanModel, nil
+	}
+}
 
 // ── mini status ────────────────────────────────────────
 
@@ -205,6 +240,37 @@ func modelsCmd() *cobra.Command {
 
 // ── mini ask ───────────────────────────────────────────
 
+type fileRef struct {
+	Path string
+	Size int
+}
+
+// expandFileRefs scans the prompt for @path tokens and replaces them with
+// file contents.  A ref is recognised when @ appears at the start of a
+// whitespace-delimited word and the path after @ resolves to a readable
+// file.  Non-existent paths are left as literal text.
+func expandFileRefs(prompt string) (string, []fileRef, error) {
+	words := strings.Fields(prompt)
+	var refs []fileRef
+	for i, w := range words {
+		if !strings.HasPrefix(w, "@") || len(w) < 2 {
+			continue
+		}
+		path := w[1:]
+		data, err := os.ReadFile(path)
+		if err == nil {
+			words[i] = fmt.Sprintf("\n--- %s ---\n%s\n---\n", path, strings.TrimRight(string(data), "\n"))
+			refs = append(refs, fileRef{Path: path, Size: len(data)})
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return "", nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+	}
+	return strings.Join(words, " "), refs, nil
+}
+
+
 func askCmd() *cobra.Command {
 	var (
 		model     string
@@ -212,19 +278,53 @@ func askCmd() *cobra.Command {
 		temp      float64
 		maxTokens int
 		noStream  bool
+		session   string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "ask PROMPT",
 		Short: "Send a single-shot prompt to the LLM",
-		Long:  "Send a prompt and stream the response. Joins all arguments into one prompt.",
-		Args:  cobra.MinimumNArgs(1),
+		Long: `Send a prompt and stream the response. Joins all arguments into one prompt.
+Use @file to inline file contents, e.g.: mini ask "explain @main.go"
+
+  mini ask "explain this code"                     # saves to "ask" session
+  mini ask lemur-256 "explain @main.go"            # saves to lemur-256 session
+  mini ask -S my-review "rate @file.md"            # saves to my-review session`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if model == "" {
 				model = cfg.DefaultModel
 			}
 
-			prompt := strings.Join(args, " ")
+			// If first arg matches an existing session or -S is set, use it
+			if session == "" && len(args) > 1 && SessionExists(args[0]) {
+				session = args[0]
+				args = args[1:]
+			}
+
+			// No args — prompt interactively
+			if len(args) == 0 {
+				fmt.Fprint(os.Stderr, Info.Render("prompt: "))
+				scanner := bufio.NewScanner(os.Stdin)
+				if !scanner.Scan() {
+					return nil
+				}
+				args = []string{scanner.Text()}
+			}
+
+			prompt, refs, err := expandFileRefs(strings.Join(args, " "))
+			if err != nil {
+				return err
+			}
+
+			// Report loaded files
+			if len(refs) > 0 {
+				for _, r := range refs {
+					fmt.Fprintf(os.Stderr, "  %s %s\n",
+						Info.Render("@"),
+						Dim.Render(fmt.Sprintf("%s (%d bytes)", filepath.Base(r.Path), r.Size)))
+				}
+			}
 
 			var msgs []ChatMessage
 			if system != "" {
@@ -232,8 +332,13 @@ func askCmd() *cobra.Command {
 			}
 			msgs = append(msgs, ChatMessage{Role: "user", Content: prompt})
 
+			client, cleanModel, err := llmClient(model)
+			if err != nil {
+				return err
+			}
+
 			req := ChatRequest{
-				Model:    model,
+				Model:    cleanModel,
 				Messages: msgs,
 				Options: ChatOptions{
 					Temperature: temp,
@@ -241,36 +346,102 @@ func askCmd() *cobra.Command {
 				},
 			}
 
-			oc := ollamaClient()
+			// Ctrl+C: prompt user to wait or cancel
+			ctx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, os.Interrupt)
+			defer signal.Stop(sigCh)
 
-			if noStream {
-				resp, err := oc.Chat(req)
-				if err != nil {
-					return err
+			go func() {
+				for range sigCh {
+					fmt.Fprintf(os.Stderr, "\n%s ", Info.Render("  cancel? [y/N]"))
+					var ans string
+					fmt.Scanln(&ans)
+					if ans == "y" || ans == "Y" {
+						cancel()
+						return
+					}
+					fmt.Fprintf(os.Stderr, "%s\n", Info.Render("  continuing..."))
 				}
-				fmt.Println(resp.Message.Content)
-				fmt.Println(Sep(50))
-				fmt.Println(Info.Render(fmt.Sprintf("  %s  %d tokens  %s",
-					model, resp.EvalCount, FmtTokS(resp.EvalCount, resp.EvalDuration))))
-				return nil
-			}
+			}()
 
-			// Streaming (default)
-			fmt.Println()
-			final, err := oc.ChatStream(req, os.Stdout)
+			// Open session for history persistence
+			sessName := session
+			if sessName == "" {
+				sessName = "ask"
+			}
+			sess, err := OpenSession(sessName)
 			if err != nil {
 				return err
 			}
-			fmt.Println()
+			now := time.Now().Format(time.RFC3339)
+			sess.AppendHistory(HistoryEntry{Role: "user", Content: prompt, Time: now})
+
+			// saveResponse writes whatever we got (even partial) to session
+			saveResponse := func(response string, evalCount int, evalDuration int64) {
+				if response == "" {
+					return
+				}
+				sess.AppendHistory(HistoryEntry{
+					Role: "assistant", Content: response, Time: now,
+					Tokens: evalCount, TokS: func() float64 {
+						if evalDuration <= 0 {
+							return 0
+						}
+						return float64(evalCount) / (float64(evalDuration) / 1e9)
+					}(),
+				})
+			}
+
+			var response string
+			var evalCount int
+			var evalDuration int64
+
+			if noStream {
+				stop := Spinner("thinking")
+				resp, err := client.Chat(req)
+				stop()
+				if err != nil {
+					return err
+				}
+				response = resp.Message.Content
+				evalCount = resp.EvalCount
+				evalDuration = resp.EvalDuration
+				fmt.Println(response)
+			} else {
+				// Streaming — tee to buffer to capture response
+				var buf bytes.Buffer
+				w := io.MultiWriter(os.Stdout, &buf)
+				stop := Spinner("thinking")
+				fmt.Println()
+				final, err := client.ChatStreamCb(ctx, req, w, func() { stop() })
+				stop()
+				response = buf.String()
+				if err != nil {
+					saveResponse(response, 0, 0) // save partial
+					if ctx.Err() != nil {
+						fmt.Fprintf(os.Stderr, "\n%s\n", Info.Render("  cancelled (partial response saved)"))
+						return nil
+					}
+					return err
+				}
+				evalCount = final.EvalCount
+				evalDuration = final.EvalDuration
+				fmt.Println()
+			}
+
+			saveResponse(response, evalCount, evalDuration)
 			fmt.Println(Sep(50))
 			fmt.Println(Info.Render(fmt.Sprintf("  %s  %d tokens  %s",
-				model, final.EvalCount, FmtTokS(final.EvalCount, final.EvalDuration))))
+				model, evalCount, FmtTokS(evalCount, evalDuration))))
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVarP(&model, "model", "m", "", "model name (default from config)")
 	cmd.Flags().StringVarP(&system, "system", "s", "", "system prompt")
+	cmd.Flags().StringVarP(&session, "session", "S", "", "save to session (default: \"ask\")")
 	cmd.Flags().Float64VarP(&temp, "temp", "t", 0.3, "temperature")
 	cmd.Flags().IntVarP(&maxTokens, "max-tokens", "n", 4096, "max output tokens")
 	cmd.Flags().BoolVar(&noStream, "no-stream", false, "wait for full response instead of streaming")
@@ -281,9 +452,9 @@ func askCmd() *cobra.Command {
 // ── mini sessions ──────────────────────────────────────
 
 func sessionsCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "sessions",
-		Short: "List chat sessions",
+		Short: "List and manage chat sessions",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sessions, err := ListSessions()
 			if err != nil {
@@ -309,10 +480,157 @@ func sessionsCmd() *cobra.Command {
 				}
 				line := fmt.Sprintf("%-30s %8s  %s", s.Name, turns, Info.Render(age))
 				fmt.Printf("  %s%s\n", Branch(last), line)
+				if s.FirstMsg != "" {
+					indent := "  │   "
+					if last {
+						indent = "      "
+					}
+					fmt.Printf("%s%s\n", indent, Dim.Render("first: "+s.FirstMsg))
+					if s.LastMsg != "" && s.LastMsg != s.FirstMsg {
+						fmt.Printf("%s%s\n", indent, Dim.Render("last:  "+s.LastMsg))
+					}
+				}
 			}
 			fmt.Println()
 			return nil
 		},
+	}
+
+	cmd.AddCommand(sessionsRmCmd())
+	cmd.AddCommand(sessionsCleanCmd())
+	return cmd
+}
+
+func sessionsRmCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm [SESSION]",
+		Short: "Remove a session",
+		Long: `Remove a session by name, or pick interactively.
+
+  mini sessions rm lemur-256       # delete by name
+  mini sessions rm                 # interactive picker`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var name string
+			if len(args) == 1 {
+				name = args[0]
+			} else {
+				// Interactive picker
+				picked, err := PickSession()
+				if err != nil {
+					return err
+				}
+				name = picked
+			}
+
+			if !SessionExists(name) {
+				return fmt.Errorf("session %q not found", name)
+			}
+
+			// Confirm
+			fmt.Fprintf(os.Stderr, "  %s ", Info.Render(fmt.Sprintf("delete %q? [y/N]", name)))
+			var ans string
+			fmt.Scanln(&ans)
+			if ans != "y" && ans != "Y" {
+				fmt.Println(Info.Render("  cancelled"))
+				return nil
+			}
+
+			if err := DeleteSession(name); err != nil {
+				return err
+			}
+			fmt.Println(Info.Render(fmt.Sprintf("  deleted %s", name)))
+			return nil
+		},
+	}
+}
+
+func sessionsCleanCmd() *cobra.Command {
+	var olderThan string
+
+	cmd := &cobra.Command{
+		Use:   "clean",
+		Short: "Remove old or empty sessions",
+		Long: `Remove sessions older than a threshold.
+
+  mini sessions clean                    # remove empty sessions
+  mini sessions clean --older-than 7d    # remove sessions idle > 7 days
+  mini sessions clean --older-than 30d   # remove sessions idle > 30 days`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sessions, err := ListSessions()
+			if err != nil {
+				return err
+			}
+
+			var threshold time.Duration
+			if olderThan != "" {
+				d, err := parseDuration(olderThan)
+				if err != nil {
+					return fmt.Errorf("invalid duration %q: %w", olderThan, err)
+				}
+				threshold = d
+			}
+
+			cutoff := time.Now().Add(-threshold)
+			var toDelete []string
+			for _, s := range sessions {
+				if threshold > 0 && s.LastUsed.Before(cutoff) {
+					toDelete = append(toDelete, s.Name)
+				} else if threshold == 0 && s.Turns == 0 {
+					toDelete = append(toDelete, s.Name)
+				}
+			}
+
+			if len(toDelete) == 0 {
+				fmt.Println(Info.Render("  nothing to clean"))
+				return nil
+			}
+
+			fmt.Println()
+			for _, name := range toDelete {
+				fmt.Printf("  %s\n", Dim.Render(name))
+			}
+			fmt.Fprintf(os.Stderr, "\n  %s ", Info.Render(fmt.Sprintf("delete %d sessions? [y/N]", len(toDelete))))
+			var ans string
+			fmt.Scanln(&ans)
+			if ans != "y" && ans != "Y" {
+				fmt.Println(Info.Render("  cancelled"))
+				return nil
+			}
+
+			for _, name := range toDelete {
+				if err := DeleteSession(name); err != nil {
+					fmt.Fprintf(os.Stderr, "  warning: %s: %v\n", name, err)
+					continue
+				}
+			}
+			fmt.Println(Info.Render(fmt.Sprintf("  deleted %d sessions", len(toDelete))))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&olderThan, "older-than", "", "delete sessions older than duration (e.g. 7d, 30d)")
+	return cmd
+}
+
+// parseDuration parses simple day-based durations like "7d", "30d".
+func parseDuration(s string) (time.Duration, error) {
+	if len(s) < 2 {
+		return 0, fmt.Errorf("too short")
+	}
+	unit := s[len(s)-1]
+	numStr := s[:len(s)-1]
+	var n int
+	if _, err := fmt.Sscanf(numStr, "%d", &n); err != nil {
+		return 0, err
+	}
+	switch unit {
+	case 'd':
+		return time.Duration(n) * 24 * time.Hour, nil
+	case 'h':
+		return time.Duration(n) * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("unknown unit %q (use d or h)", string(unit))
 	}
 }
 
@@ -363,9 +681,13 @@ func updateCmd() *cobra.Command {
 			}
 			fmt.Println(Row("pull", output))
 
-			// Show current version
+			// Show current version and update daemon state
 			hash, _ := ssh.Run(fmt.Sprintf("cd %s && git rev-parse --short HEAD", repoDir))
 			fmt.Println(Row("version", hash))
+			if state, err := readDaemonState(); err == nil {
+				state.MiniHash = hash
+				writeDaemonState(state)
+			}
 
 			if setup {
 				fmt.Println()

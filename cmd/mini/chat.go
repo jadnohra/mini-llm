@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,12 +34,19 @@ is created with an auto-generated name (e.g. capybara-314).
   mini chat capybara-314 "add memoization"        # continue existing
   mini chat my-project "hello"                    # new session, user-named
   mini chat capybara-314 --history                # view history`,
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var sessionName, prompt string
 
-			// If first arg is an existing session, use it
-			if SessionExists(args[0]) {
+			if len(args) == 0 {
+				// Interactive session picker
+				name, err := PickSession()
+				if err != nil {
+					return err
+				}
+				sessionName = name
+			} else if SessionExists(args[0]) {
+				// First arg is an existing session, use it
 				sessionName = args[0]
 				if len(args) > 1 {
 					prompt = strings.Join(args[1:], " ")
@@ -64,7 +73,15 @@ is created with an auto-generated name (e.g. capybara-314).
 			}
 
 			if prompt == "" {
-				return fmt.Errorf("provide a prompt: mini chat %s \"your prompt\"", sessionName)
+				fmt.Fprint(os.Stderr, Info.Render(sessionName+"> "))
+				scanner := bufio.NewScanner(os.Stdin)
+				if !scanner.Scan() {
+					return nil
+				}
+				prompt = scanner.Text()
+				if prompt == "" {
+					return nil
+				}
 			}
 
 			// Model override
@@ -81,6 +98,20 @@ is created with an auto-generated name (e.g. capybara-314).
 				effectiveTemp = temp
 			}
 
+			// Expand @file refs in prompt
+			expanded, refs, err := expandFileRefs(prompt)
+			if err != nil {
+				return err
+			}
+			if len(refs) > 0 {
+				for _, r := range refs {
+					fmt.Fprintf(os.Stderr, "  %s %s\n",
+						Info.Render("@"),
+						Dim.Render(fmt.Sprintf("%s (%d bytes)", filepath.Base(r.Path), r.Size)))
+				}
+				prompt = expanded
+			}
+
 			turn := sess.Turn() + 1
 
 			// Add user message to in-memory history for the request,
@@ -94,9 +125,14 @@ is created with an auto-generated name (e.g. capybara-314).
 			}
 			sess.History = append(sess.History, userEntry)
 
-			// Build request
+			// Build request — resolve provider from model name
+			client, cleanModel, err := llmClient(sess.Config.Model)
+			if err != nil {
+				return err
+			}
+
 			req := ChatRequest{
-				Model:    sess.Config.Model,
+				Model:    cleanModel,
 				Messages: sess.Messages(),
 				Options: ChatOptions{
 					Temperature: effectiveTemp,
@@ -108,8 +144,7 @@ is created with an auto-generated name (e.g. capybara-314).
 			fmt.Println()
 			var buf bytes.Buffer
 			w := io.MultiWriter(os.Stdout, &buf)
-			oc := ollamaClient()
-			final, err := oc.ChatStream(req, w)
+			final, err := client.ChatStream(req, w)
 			if err != nil {
 				return err
 			}

@@ -23,12 +23,13 @@ type SessionConfig struct {
 }
 
 type HistoryEntry struct {
-	Role    string  `json:"role"`
-	Content string  `json:"content"`
-	Tokens  int     `json:"tokens,omitempty"`
-	Turn    int     `json:"turn,omitempty"`
-	TokS    float64 `json:"tok_s,omitempty"`
-	Time    string  `json:"time,omitempty"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Tokens    int        `json:"tokens,omitempty"`
+	Turn      int        `json:"turn,omitempty"`
+	TokS      float64    `json:"tok_s,omitempty"`
+	Time      string     `json:"time,omitempty"`
 }
 
 type Session struct {
@@ -75,6 +76,22 @@ func SessionExists(name string) bool {
 	}
 	_, err = os.Stat(filepath.Join(base, name))
 	return err == nil
+}
+
+// DeleteSession removes a session directory entirely.
+func DeleteSession(name string) error {
+	if err := validateSessionName(name); err != nil {
+		return err
+	}
+	base, err := sessionsDir()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(base, name)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("session %q not found", name)
+	}
+	return os.RemoveAll(dir)
 }
 
 // ── open / create ──────────────────────────────────────
@@ -241,7 +258,7 @@ func (s *Session) Messages() []ChatMessage {
 		msgs = append(msgs, ChatMessage{Role: "system", Content: s.System})
 	}
 	for _, e := range s.History {
-		msgs = append(msgs, ChatMessage{Role: e.Role, Content: e.Content})
+		msgs = append(msgs, ChatMessage{Role: e.Role, Content: e.Content, ToolCalls: e.ToolCalls})
 	}
 	return msgs
 }
@@ -251,7 +268,10 @@ func (s *Session) Messages() []ChatMessage {
 type SessionInfo struct {
 	Name     string
 	Turns    int
+	Messages int
 	LastUsed time.Time
+	FirstMsg string // first user message (truncated)
+	LastMsg  string // last message of any role (truncated)
 }
 
 func ListSessions() ([]SessionInfo, error) {
@@ -275,7 +295,7 @@ func ListSessions() ([]SessionInfo, error) {
 		dir := filepath.Join(base, e.Name())
 		info := SessionInfo{Name: e.Name()}
 
-		// Count turns and find last timestamp from history.jsonl
+		// Count turns/messages and capture first/last from history.jsonl
 		histPath := filepath.Join(dir, "history.jsonl")
 		if f, err := os.Open(histPath); err == nil {
 			scanner := bufio.NewScanner(f)
@@ -289,9 +309,14 @@ func ListSessions() ([]SessionInfo, error) {
 				if json.Unmarshal([]byte(line), &entry) != nil {
 					continue
 				}
+				info.Messages++
 				if entry.Role == "user" {
 					info.Turns++
+					if info.FirstMsg == "" {
+						info.FirstMsg = firstLine(entry.Content, 60)
+					}
 				}
+				info.LastMsg = firstLine(entry.Content, 60)
 				if entry.Time != "" {
 					if t, err := time.Parse(time.RFC3339, entry.Time); err == nil {
 						info.LastUsed = t
@@ -311,6 +336,18 @@ func ListSessions() ([]SessionInfo, error) {
 		sessions = append(sessions, info)
 	}
 	return sessions, nil
+}
+
+// firstLine returns the first line of s, truncated to max characters.
+func firstLine(s string, max int) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if len(s) > max {
+		return s[:max-1] + "…"
+	}
+	return s
 }
 
 // ── message building ───────────────────────────────────

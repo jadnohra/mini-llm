@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -11,9 +12,11 @@ import (
 type Config struct {
 	Host         string `yaml:"host"`
 	SSHUser      string `yaml:"ssh_user"`
+	SSHKey       string `yaml:"ssh_key"`
 	OllamaPort   int    `yaml:"ollama_port"`
 	LlamaCPPPort int    `yaml:"llamacpp_port"`
 	DefaultModel string `yaml:"default_model"`
+	HFToken      string `yaml:"hf_token"`
 }
 
 func (c *Config) OllamaURL() string {
@@ -53,6 +56,13 @@ func LoadConfig() Config {
 		fmt.Fprintf(os.Stderr, "missing config: %v\n", missing)
 		fmt.Fprintf(os.Stderr, "set in ./config.yaml (cli: section) or ~/.mini/config.yaml\n")
 		os.Exit(1)
+	}
+
+	// Expand ~ in ssh_key path
+	if strings.HasPrefix(c.SSHKey, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			c.SSHKey = filepath.Join(home, c.SSHKey[2:])
+		}
 	}
 
 	return c
@@ -107,7 +117,13 @@ func merge(c *Config, src *Config) {
 	if src.LlamaCPPPort != 0 {
 		c.LlamaCPPPort = src.LlamaCPPPort
 	}
+	if src.SSHKey != "" {
+		c.SSHKey = src.SSHKey
+	}
 	if src.DefaultModel != "" {
 		c.DefaultModel = src.DefaultModel
+	}
+	if src.HFToken != "" {
+		c.HFToken = src.HFToken
 	}
 }

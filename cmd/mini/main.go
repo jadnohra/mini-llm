@@ -30,6 +30,7 @@ func main() {
 	root.AddCommand(sttCmd())
 	root.AddCommand(dictateCmd())
 	root.AddCommand(daemonCmd())
+	root.AddCommand(cueCmd())
 
 	err := root.Execute()
 	if err != nil {

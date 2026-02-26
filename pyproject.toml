@@ -6,3 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     "pyyaml>=6.0",
 ]
+
+[tool.uv.workspace]
+members = [
+    "mini-tools/cue",
+]
