@@ -130,7 +130,8 @@ def inference(video, audio, output, steps=20, guidance=1.5):
         sys.exit(1)
 
     env = os.environ.copy()
-    env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+    # MPS fallback removed — all LatentSync ops work natively on MPS (verified by diagnose_mps.py).
+    # The blanket fallback silently routes ALL ops to CPU, defeating GPU usage entirely.
 
     config_path = os.path.join(REPO_DIR, "configs", "unet", "stage2_512.yaml")
     ckpt_path = os.path.join(REPO_DIR, "checkpoints", "latentsync_unet.pt")
@@ -169,6 +170,7 @@ def inference(video, audio, output, steps=20, guidance=1.5):
 def main():
     parser = argparse.ArgumentParser(description="LatentSync lip-sync (MPS)")
     parser.add_argument("--setup", action="store_true", help="Run setup only")
+    parser.add_argument("--diagnose", action="store_true", help="Run MPS GPU diagnostic")
     parser.add_argument("--video", help="Input face video")
     parser.add_argument("--audio", help="Input audio")
     parser.add_argument("--output", "-o", help="Output video path")
@@ -179,6 +181,11 @@ def main():
     if args.setup:
         setup()
         return
+
+    if args.diagnose:
+        diagnose_script = os.path.join(SCRIPT_DIR, "diagnose_mps.py")
+        result = subprocess.run([VENV_PYTHON, diagnose_script])
+        sys.exit(result.returncode)
 
     if not args.video or not args.audio or not args.output:
         parser.error("--video, --audio, and --output are required for inference")
