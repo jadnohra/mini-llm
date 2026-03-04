@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """LatentSync wrapper for MPS (Apple Silicon).
 
-Setup: clones LatentSync, creates venv, installs deps, patches for MPS,
-       downloads v1.5 checkpoints.
-Inference: runs patched inference.py with PYTORCH_ENABLE_MPS_FALLBACK=1.
+Setup: installs system deps (ffmpeg), clones LatentSync, creates venv,
+       installs Python deps, patches for MPS, downloads v1.5 checkpoints.
+Inference: runs patched inference.py on MPS GPU.
 """
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -19,6 +20,32 @@ MARKER = os.path.join(BASE_DIR, ".setup-done")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REQUIREMENTS = os.path.join(SCRIPT_DIR, "requirements-mps.txt")
 PATCH_SCRIPT = os.path.join(SCRIPT_DIR, "patch_mps.py")
+
+# System tools required for inference (installed via brew)
+BREW_DEPS = ["ffmpeg"]
+
+
+def ensure_brew_path():
+    """Ensure Homebrew is on PATH (SSH sessions often miss it)."""
+    for brew_dir in ["/opt/homebrew/bin", "/usr/local/bin"]:
+        if os.path.exists(os.path.join(brew_dir, "brew")) and brew_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = brew_dir + ":" + os.environ["PATH"]
+            break
+
+
+def ensure_system_deps():
+    """Install system dependencies via brew."""
+    ensure_brew_path()
+    if not shutil.which("brew"):
+        print("WARNING: Homebrew not found — cannot install system deps.")
+        print("  Install manually: brew install " + " ".join(BREW_DEPS))
+        return
+    for dep in BREW_DEPS:
+        if shutil.which(dep):
+            print(f"  OK   {dep}")
+            continue
+        print(f"  Installing {dep}...")
+        run(f"brew install {dep}")
 
 # Critical imports that must work after install
 VERIFY_IMPORTS = ["torch", "diffusers", "transformers", "decord", "cv2", "mediapipe"]
@@ -73,8 +100,12 @@ def verify_install():
 
 
 def setup():
-    """First-time setup: clone, venv, deps, patch, checkpoints."""
+    """First-time setup: system deps, clone, venv, deps, patch, checkpoints."""
     os.makedirs(BASE_DIR, exist_ok=True)
+
+    # System dependencies (brew)
+    print("Checking system dependencies...")
+    ensure_system_deps()
 
     # Clone LatentSync
     if not os.path.isdir(REPO_DIR):
@@ -120,6 +151,8 @@ def setup():
 
 def inference(video, audio, output, steps=20, guidance=1.5):
     """Run LatentSync inference with MPS."""
+    ensure_brew_path()
+
     if not os.path.isfile(MARKER):
         print("First run — running setup...")
         setup()
