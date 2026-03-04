@@ -8,7 +8,8 @@ import sys
 
 
 def patch_file(path, replacements):
-    """Apply a list of (old, new) string replacements to a file."""
+    """Apply a list of (old, new) string replacements to a file.
+    Idempotent: if the new pattern is already present, skip silently."""
     if not os.path.exists(path):
         print(f"  SKIP {path} (not found)")
         return False
@@ -16,13 +17,15 @@ def patch_file(path, replacements):
         content = f.read()
     original = content
     for old, new in replacements:
+        if new in content:
+            continue  # already patched
         if old not in content:
             print(f"  WARN {path}: pattern not found: {old[:60]}...")
             continue
         content = content.replace(old, new)
     if content == original:
-        print(f"  SKIP {path} (no changes)")
-        return False
+        print(f"  OK   {path} (already patched)")
+        return True
     with open(path, "w") as f:
         f.write(content)
     print(f"  OK   {path}")
@@ -95,7 +98,8 @@ def patch_resnet(repo_dir):
 
 
 def patch_decord_imports(repo_dir):
-    """Replace 'decord' imports with 'eva_decord' throughout the codebase."""
+    """Replace 'decord' imports with 'eva_decord' throughout the codebase.
+    Idempotent: skips files already using eva_decord."""
     count = 0
     for ext in ("*.py",):
         for path in glob.glob(os.path.join(repo_dir, "**", ext), recursive=True):
@@ -110,6 +114,7 @@ def patch_decord_imports(repo_dir):
                     f.write(new_content)
                 print(f"  OK   {path} (decord → eva_decord)")
                 count += 1
+    print(f"  decord→eva_decord: {count} files patched (0 = already done)")
     return count
 
 
@@ -129,8 +134,7 @@ def main():
     ok &= patch_inference(repo_dir)
     ok &= patch_pipeline(repo_dir)
     ok &= patch_resnet(repo_dir)
-    n = patch_decord_imports(repo_dir)
-    print(f"  decord→eva_decord: {n} files patched")
+    patch_decord_imports(repo_dir)
 
     if ok:
         print("Done.")
