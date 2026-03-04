@@ -172,20 +172,35 @@ def benchmark():
         print("Benchmark: demo files not found, skipping.")
         return None
 
-    print("Running benchmark (first-time only, ~2 min)...")
+    print("Running benchmark (first-time only, ~1 min)...")
     config_path = os.path.join(REPO_DIR, "configs", "unet", "stage2_512.yaml")
     ckpt_path = os.path.join(REPO_DIR, "checkpoints", "latentsync_unet.pt")
     bench_output = os.path.join(BASE_DIR, ".bench_output.mp4")
 
-    # Run 2-step inference on the demo clip
-    # The first batch is always faster (cold GPU), so we run the full demo
-    # to get a realistic average. With 2 steps this takes ~2-3 min.
+    # Trim demo to ~2 seconds (50 frames = ~3 batches) for a fast benchmark.
+    # Full demo (242 frames) causes memory pressure that skews results.
+    bench_video = os.path.join(BASE_DIR, ".bench_input.mp4")
+    bench_audio = os.path.join(BASE_DIR, ".bench_input.wav")
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", demo_video, "-t", "2", "-c", "copy", bench_video],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", demo_audio, "-t", "2", "-c", "copy", bench_audio],
+        capture_output=True,
+    )
+
+    if not os.path.isfile(bench_video) or not os.path.isfile(bench_audio):
+        print("Benchmark: could not trim demo files, skipping.")
+        return None
+
+    # Run 2-step inference on the tiny clip (~3 batches × 2 steps)
     cmd = [
         VENV_PYTHON, "-m", "scripts.inference",
         "--unet_config_path", config_path,
         "--inference_ckpt_path", ckpt_path,
-        "--video_path", demo_video,
-        "--audio_path", demo_audio,
+        "--video_path", bench_video,
+        "--audio_path", bench_audio,
         "--video_out_path", bench_output,
         "--inference_steps", "2",
         "--guidance_scale", "1.0",
@@ -195,19 +210,20 @@ def benchmark():
     result = subprocess.run(cmd, cwd=REPO_DIR)
     elapsed = time.time() - t0
 
-    # Clean up benchmark output
-    if os.path.isfile(bench_output):
-        os.unlink(bench_output)
+    # Clean up benchmark files
+    for f in [bench_video, bench_audio, bench_output]:
+        if os.path.isfile(f):
+            os.unlink(f)
 
     if result.returncode != 0:
         print(f"Benchmark failed (exit {result.returncode})")
         return None
 
-    # demo1 has 242 frames = 16 batches, 2 steps each
-    # Subtract ~30s overhead (face detection, affine, restore, ffmpeg)
-    overhead = 30
+    # ~2s at 25fps = ~50 frames = ceil(50/16) = 4 batches, 2 steps each
+    # Subtract overhead (face detection, affine, restore, ffmpeg ~15s)
+    overhead = 15
     denoise_time = max(elapsed - overhead, elapsed * 0.8)
-    num_batches = 16
+    num_batches = max((50 + 15) // 16, 1)
     bench_steps = 2
     sec_per_step = denoise_time / (num_batches * bench_steps)
 
@@ -286,10 +302,19 @@ def inference(video, audio, output, steps=20, guidance=1.5):
         benchmark()
 
     # Estimate time before starting
+    num_frames = get_video_frame_count(video)
     est = estimate_time(video, steps)
     if est is not None:
-        mins = est / 60
-        print(f"Estimated time: ~{mins:.0f} min ({steps} steps)")
+        num_batches = ((num_frames or 242) + 15) // 16
+        if est < 120:
+            print(f"Estimated time: ~{est:.0f}s ({num_batches} batches × {steps} steps)")
+        else:
+            mins = est / 60
+            hrs = mins / 60
+            if hrs >= 1:
+                print(f"Estimated time: ~{hrs:.1f}h ({num_batches} batches × {steps} steps)")
+            else:
+                print(f"Estimated time: ~{mins:.0f} min ({num_batches} batches × {steps} steps)")
 
     env = os.environ.copy()
     # MPS fallback removed — all LatentSync ops work natively on MPS (verified by diagnose_mps.py).
