@@ -87,19 +87,13 @@ func lipsyncCmd() *cobra.Command {
 			remoteOutput := fmt.Sprintf("%s/output.mp4", remoteDir)
 
 			// Upload video + audio
-			stop := Spinner("Uploading video")
+			fmt.Fprintln(os.Stderr, Info.Render("  uploading files..."))
 			if err := ssh.Push(video, remoteVideo); err != nil {
-				stop()
 				return fmt.Errorf("upload video failed: %w", err)
 			}
-			stop()
-
-			stop = Spinner("Uploading audio")
 			if err := ssh.Push(audio, remoteAudio); err != nil {
-				stop()
 				return fmt.Errorf("upload audio failed: %w", err)
 			}
-			stop()
 
 			// Run inference
 			inferCmd := fmt.Sprintf(
@@ -108,7 +102,7 @@ func lipsyncCmd() *cobra.Command {
 				remoteVideo, remoteAudio, remoteOutput,
 				steps, guidance,
 			)
-			fmt.Println(Info.Render("  running inference on Mini..."))
+			fmt.Fprintln(os.Stderr, Info.Render("  running inference on Mini..."))
 			if err := ssh.RunInteractive(inferCmd); err != nil {
 				// Cleanup remote
 				ssh.Run(fmt.Sprintf("rm -rf %s", remoteDir))
@@ -116,13 +110,11 @@ func lipsyncCmd() *cobra.Command {
 			}
 
 			// Download output
-			stop = Spinner("Downloading output")
+			fmt.Fprintln(os.Stderr, Info.Render("  downloading output..."))
 			if err := ssh.Pull(remoteOutput, output); err != nil {
-				stop()
 				ssh.Run(fmt.Sprintf("rm -rf %s", remoteDir))
 				return fmt.Errorf("download output failed: %w", err)
 			}
-			stop()
 
 			// Cleanup remote
 			ssh.Run(fmt.Sprintf("rm -rf %s", remoteDir))
