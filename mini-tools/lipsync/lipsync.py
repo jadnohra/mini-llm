@@ -132,7 +132,7 @@ def inference(video, audio, output, steps=20, guidance=1.5):
     env = os.environ.copy()
     env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
-    config_path = os.path.join(REPO_DIR, "configs", "unet", "second_stage.yaml")
+    config_path = os.path.join(REPO_DIR, "configs", "unet", "stage2_512.yaml")
     ckpt_path = os.path.join(REPO_DIR, "checkpoints", "latentsync_unet.pt")
 
     cmd = [
