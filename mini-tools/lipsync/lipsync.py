@@ -142,7 +142,7 @@ def inference(video, audio, output, steps=20, guidance=1.5):
         "--video_path", video,
         "--audio_path", audio,
         "--video_out_path", output,
-        "--num_inference_steps", str(steps),
+        "--inference_steps", str(steps),
         "--guidance_scale", str(guidance),
     ]
 
