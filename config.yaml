@@ -51,6 +51,10 @@ open_webui:
   install: true
   port: 8080
 
+# ── LatentSync (lip sync) ─────────────────────────────
+lipsync:
+  install: false
+
 # ── Tailscale (optional) ───────────────────────────────
 tailscale:
   install: false

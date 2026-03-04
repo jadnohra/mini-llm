@@ -7,16 +7,19 @@ Inference: runs patched inference.py on MPS GPU.
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 
 BASE_DIR = os.path.expanduser("~/.mini/lipsync")
 REPO_DIR = os.path.join(BASE_DIR, "LatentSync")
 VENV_DIR = os.path.join(BASE_DIR, "venv")
 VENV_PYTHON = os.path.join(VENV_DIR, "bin", "python")
 MARKER = os.path.join(BASE_DIR, ".setup-done")
+BENCHMARK_CACHE = os.path.join(BASE_DIR, ".benchmark.json")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REQUIREMENTS = os.path.join(SCRIPT_DIR, "requirements-mps.txt")
 PATCH_SCRIPT = os.path.join(SCRIPT_DIR, "patch_mps.py")
@@ -149,6 +152,84 @@ def setup():
     print("Setup complete.")
 
 
+def benchmark():
+    """Run a tiny inference to measure per-step speed. Caches result."""
+    if os.path.isfile(BENCHMARK_CACHE):
+        with open(BENCHMARK_CACHE) as f:
+            cached = json.load(f)
+        print(f"Benchmark (cached): {cached['sec_per_step']:.1f}s/step on {cached['device']}")
+        return cached
+
+    # Use built-in demo files
+    demo_video = os.path.join(REPO_DIR, "assets", "demo1_video.mp4")
+    demo_audio = os.path.join(REPO_DIR, "assets", "demo1_audio.wav")
+    if not os.path.isfile(demo_video) or not os.path.isfile(demo_audio):
+        print("Benchmark: demo files not found, skipping.")
+        return None
+
+    print("Running benchmark (2-step inference on demo clip)...")
+    config_path = os.path.join(REPO_DIR, "configs", "unet", "stage2_512.yaml")
+    ckpt_path = os.path.join(REPO_DIR, "checkpoints", "latentsync_unet.pt")
+    bench_output = os.path.join(BASE_DIR, ".bench_output.mp4")
+
+    cmd = [
+        VENV_PYTHON, "-m", "scripts.inference",
+        "--unet_config_path", config_path,
+        "--inference_ckpt_path", ckpt_path,
+        "--video_path", demo_video,
+        "--audio_path", demo_audio,
+        "--video_out_path", bench_output,
+        "--inference_steps", "2",
+        "--guidance_scale", "1.0",
+    ]
+
+    t0 = time.time()
+    result = subprocess.run(cmd, cwd=REPO_DIR)
+    elapsed = time.time() - t0
+
+    # Clean up benchmark output
+    if os.path.isfile(bench_output):
+        os.unlink(bench_output)
+
+    if result.returncode != 0:
+        print(f"Benchmark failed (exit {result.returncode})")
+        return None
+
+    # Estimate: demo1 has 242 frames = 16 batches, 2 steps each
+    # sec_per_step = elapsed / (num_batches * steps)
+    num_batches = 16
+    steps = 2
+    sec_per_step = elapsed / (num_batches * steps)
+
+    # Detect device
+    device = "mps"  # we know it's MPS since we removed fallback
+
+    cached = {
+        "sec_per_step": round(sec_per_step, 2),
+        "device": device,
+        "total_bench_sec": round(elapsed, 1),
+        "bench_frames": 242,
+        "bench_steps": steps,
+    }
+
+    with open(BENCHMARK_CACHE, "w") as f:
+        json.dump(cached, f, indent=2)
+
+    print(f"Benchmark: {sec_per_step:.1f}s/step on {device} ({elapsed:.0f}s total)")
+    return cached
+
+
+def estimate_time(num_frames, steps):
+    """Estimate inference time using cached benchmark."""
+    if not os.path.isfile(BENCHMARK_CACHE):
+        return None
+    with open(BENCHMARK_CACHE) as f:
+        cached = json.load(f)
+    num_batches = (num_frames + 15) // 16  # 16 frames per batch
+    total_sec = cached["sec_per_step"] * num_batches * steps
+    return total_sec
+
+
 def inference(video, audio, output, steps=20, guidance=1.5):
     """Run LatentSync inference with MPS."""
     ensure_brew_path()
@@ -161,6 +242,16 @@ def inference(video, audio, output, steps=20, guidance=1.5):
         print(f"Error: venv python not found at {VENV_PYTHON}")
         print("Run with --setup to reinstall.")
         sys.exit(1)
+
+    # Run benchmark on first-ever invocation (caches for future use)
+    if not os.path.isfile(BENCHMARK_CACHE):
+        benchmark()
+
+    # Show time estimate if we have benchmark data
+    est = estimate_time(num_frames=242, steps=steps)  # TODO: detect actual frame count
+    if est is not None:
+        mins = est / 60
+        print(f"Estimated time: ~{mins:.0f} min ({steps} steps)")
 
     env = os.environ.copy()
     # MPS fallback removed — all LatentSync ops work natively on MPS (verified by diagnose_mps.py).
@@ -187,14 +278,17 @@ def inference(video, audio, output, steps=20, guidance=1.5):
     print(f"  steps:    {steps}")
     print(f"  guidance: {guidance}")
 
+    t0 = time.time()
     result = subprocess.run(cmd, cwd=REPO_DIR, env=env)
+    elapsed = time.time() - t0
+
     if result.returncode != 0:
         print(f"Inference failed (exit {result.returncode})")
         sys.exit(1)
 
     if os.path.isfile(output):
         size = os.path.getsize(output)
-        print(f"Done. Output: {output} ({size} bytes)")
+        print(f"Done. Output: {output} ({size} bytes, {elapsed:.0f}s)")
     else:
         print(f"Error: output file not created at {output}")
         sys.exit(1)
@@ -204,6 +298,7 @@ def main():
     parser = argparse.ArgumentParser(description="LatentSync lip-sync (MPS)")
     parser.add_argument("--setup", action="store_true", help="Run setup only")
     parser.add_argument("--diagnose", action="store_true", help="Run MPS GPU diagnostic")
+    parser.add_argument("--benchmark", action="store_true", help="Run speed benchmark (uses demo files)")
     parser.add_argument("--video", help="Input face video")
     parser.add_argument("--audio", help="Input audio")
     parser.add_argument("--output", "-o", help="Output video path")
@@ -219,6 +314,16 @@ def main():
         diagnose_script = os.path.join(SCRIPT_DIR, "diagnose_mps.py")
         result = subprocess.run([VENV_PYTHON, diagnose_script])
         sys.exit(result.returncode)
+
+    if args.benchmark:
+        ensure_brew_path()
+        if not os.path.isfile(MARKER):
+            setup()
+        # Delete cache to force re-run
+        if os.path.isfile(BENCHMARK_CACHE):
+            os.unlink(BENCHMARK_CACHE)
+        benchmark()
+        return
 
     if not args.video or not args.audio or not args.output:
         parser.error("--video, --audio, and --output are required for inference")

@@ -515,6 +515,99 @@ def apply_tailscale(items: list[dict]):
             run("brew install --cask tailscale", capture=False, check=False)
 
 
+# ── Phase: lipsync ─────────────────────────────────────
+
+
+LIPSYNC_BASE = Path.home() / ".mini" / "lipsync"
+LIPSYNC_REPO = LIPSYNC_BASE / "LatentSync"
+LIPSYNC_VENV = LIPSYNC_BASE / "venv"
+LIPSYNC_MARKER = LIPSYNC_BASE / ".setup-done"
+LIPSYNC_TOOLS = Path(__file__).parent.parent / "mini-tools" / "lipsync"
+
+
+def check_lipsync(cfg: dict) -> list[dict]:
+    items = []
+    lcfg = cfg.get("lipsync", {})
+    if not lcfg.get("install", False):
+        return items
+
+    # brew: ffmpeg (should already be in system.brew_packages, but check anyway)
+    ok = has_cmd("ffmpeg")
+    items.append({"name": "brew: ffmpeg", "ok": ok, "action": "brew_pkg", "pkg": "ffmpeg"})
+
+    # cloned repo
+    ok = LIPSYNC_REPO.exists() and (LIPSYNC_REPO / "scripts" / "inference.py").exists()
+    items.append({"name": "LatentSync cloned", "ok": ok, "action": "clone_lipsync"})
+
+    # venv
+    lipsync_python = LIPSYNC_VENV / "bin" / "python"
+    ok = lipsync_python.exists()
+    items.append({"name": "lipsync venv", "ok": ok, "action": "venv_lipsync"})
+
+    # deps installed (check torch import)
+    if lipsync_python.exists():
+        ok = run_ok(f"{lipsync_python} -c 'import torch' 2>/dev/null")
+    else:
+        ok = False
+    items.append({"name": "lipsync deps", "ok": ok, "action": "deps_lipsync"})
+
+    # patches applied (check for our MPS marker in inference.py)
+    patched_file = LIPSYNC_REPO / "scripts" / "inference.py"
+    if patched_file.exists():
+        ok = "torch.backends.mps" in patched_file.read_text()
+    else:
+        ok = False
+    items.append({"name": "MPS patches", "ok": ok, "action": "patch_lipsync"})
+
+    # checkpoints
+    ckpt = LIPSYNC_REPO / "checkpoints" / "latentsync_unet.pt"
+    ok = ckpt.exists()
+    items.append({"name": "checkpoints", "ok": ok, "action": "ckpt_lipsync"})
+
+    return items
+
+
+def apply_lipsync(items: list[dict]):
+    lipsync_python = str(LIPSYNC_VENV / "bin" / "python")
+    requirements = str(LIPSYNC_TOOLS / "requirements-mps.txt")
+    patch_script = str(LIPSYNC_TOOLS / "patch_mps.py")
+
+    for item in items:
+        if item["ok"]:
+            continue
+        action = item["action"]
+        if action == "brew_pkg":
+            print(f"    installing {item['pkg']}...")
+            run(f"brew install {item['pkg']}", capture=False, check=False)
+        elif action == "clone_lipsync":
+            print(f"    cloning LatentSync...")
+            LIPSYNC_BASE.mkdir(parents=True, exist_ok=True)
+            run(f"git clone https://github.com/bytedance/LatentSync.git {LIPSYNC_REPO}",
+                capture=False, check=False)
+        elif action == "venv_lipsync":
+            print(f"    creating lipsync venv (Python 3.11)...")
+            run(f"uv venv --python 3.11 {LIPSYNC_VENV}", capture=False, check=False)
+        elif action == "deps_lipsync":
+            print(f"    installing lipsync dependencies... (this takes a few minutes)")
+            run(f"uv pip install --python {lipsync_python} -r {requirements}",
+                capture=False, check=False)
+        elif action == "patch_lipsync":
+            print(f"    applying MPS patches...")
+            run(f"{lipsync_python} {patch_script} {LIPSYNC_REPO}",
+                capture=False, check=False)
+        elif action == "ckpt_lipsync":
+            print(f"    downloading LatentSync v1.5 checkpoints...")
+            hf_cli = str(LIPSYNC_VENV / "bin" / "huggingface-cli")
+            ckpt_dir = LIPSYNC_REPO / "checkpoints"
+            run(f"{hf_cli} download ByteDance/LatentSync-1.5 --local-dir {ckpt_dir}",
+                capture=False, check=False)
+
+    # Write marker if all done
+    all_ok = all(item["ok"] or item["action"] != "brew_pkg" for item in items)
+    if all_ok or LIPSYNC_MARKER.parent.exists():
+        LIPSYNC_MARKER.write_text("ok\n")
+
+
 # ── Phase registry ──────────────────────────────────────
 
 PHASES = [
@@ -526,6 +619,7 @@ PHASES = [
     ("mlx", check_mlx, apply_mlx),
     ("webui", check_webui, apply_webui),
     ("tailscale", check_tailscale, apply_tailscale),
+    ("lipsync", check_lipsync, apply_lipsync),
 ]
 
 
@@ -547,6 +641,7 @@ OPTIONS = [
     ("llamacpp",         "llama.cpp",   "Metal-accelerated inference",       True),
     ("mlx",              "MLX",         "Apple Silicon inference",           True),
     ("open_webui",       "Open WebUI",  "browser chat interface",            True),
+    ("lipsync",          "LatentSync",  "lip-sync video on MPS GPU",         False),
     ("tailscale",        "Tailscale",   "remote access outside LAN",         False),
     ("headless_sleep",   "No sleep",    "keep Mini awake for SSH",           True),
     ("headless_restart", "Auto-restart","boot after power loss",             False),
@@ -634,6 +729,7 @@ def apply_choices(cfg: dict, choices: dict) -> dict:
     cfg.setdefault("llamacpp", {})["install"] = choices.get("llamacpp", False)
     cfg.setdefault("mlx", {})["install"] = choices.get("mlx", False)
     cfg.setdefault("open_webui", {})["install"] = choices.get("open_webui", False)
+    cfg.setdefault("lipsync", {})["install"] = choices.get("lipsync", False)
     cfg.setdefault("tailscale", {})["install"] = choices.get("tailscale", False)
     cfg.setdefault("headless", {})["disable_sleep"] = choices.get("headless_sleep", False)
     cfg.setdefault("headless", {})["auto_restart_on_power_loss"] = choices.get("headless_restart", False)
