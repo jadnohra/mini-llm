@@ -153,7 +153,12 @@ def setup():
 
 
 def benchmark():
-    """Run a tiny inference to measure per-step speed. Caches result."""
+    """Run a quick inference to measure per-step speed. Caches result.
+
+    Uses the built-in demo files but only processes enough to time
+    a few denoising steps. Result is cached to .benchmark.json
+    and reused for all future time estimates.
+    """
     if os.path.isfile(BENCHMARK_CACHE):
         with open(BENCHMARK_CACHE) as f:
             cached = json.load(f)
@@ -167,11 +172,14 @@ def benchmark():
         print("Benchmark: demo files not found, skipping.")
         return None
 
-    print("Running benchmark (2-step inference on demo clip)...")
+    print("Running benchmark (first-time only, ~2 min)...")
     config_path = os.path.join(REPO_DIR, "configs", "unet", "stage2_512.yaml")
     ckpt_path = os.path.join(REPO_DIR, "checkpoints", "latentsync_unet.pt")
     bench_output = os.path.join(BASE_DIR, ".bench_output.mp4")
 
+    # Run 2-step inference on the demo clip
+    # The first batch is always faster (cold GPU), so we run the full demo
+    # to get a realistic average. With 2 steps this takes ~2-3 min.
     cmd = [
         VENV_PYTHON, "-m", "scripts.inference",
         "--unet_config_path", config_path,
@@ -195,21 +203,22 @@ def benchmark():
         print(f"Benchmark failed (exit {result.returncode})")
         return None
 
-    # Estimate: demo1 has 242 frames = 16 batches, 2 steps each
-    # sec_per_step = elapsed / (num_batches * steps)
+    # demo1 has 242 frames = 16 batches, 2 steps each
+    # Subtract ~30s overhead (face detection, affine, restore, ffmpeg)
+    overhead = 30
+    denoise_time = max(elapsed - overhead, elapsed * 0.8)
     num_batches = 16
-    steps = 2
-    sec_per_step = elapsed / (num_batches * steps)
+    bench_steps = 2
+    sec_per_step = denoise_time / (num_batches * bench_steps)
 
-    # Detect device
-    device = "mps"  # we know it's MPS since we removed fallback
+    device = "mps"
 
     cached = {
         "sec_per_step": round(sec_per_step, 2),
         "device": device,
         "total_bench_sec": round(elapsed, 1),
         "bench_frames": 242,
-        "bench_steps": steps,
+        "bench_steps": bench_steps,
     }
 
     with open(BENCHMARK_CACHE, "w") as f:
@@ -219,14 +228,43 @@ def benchmark():
     return cached
 
 
-def estimate_time(num_frames, steps):
-    """Estimate inference time using cached benchmark."""
-    if not os.path.isfile(BENCHMARK_CACHE):
-        return None
-    with open(BENCHMARK_CACHE) as f:
-        cached = json.load(f)
+def get_video_frame_count(video_path):
+    """Get frame count from video using ffprobe."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-count_packets", "-show_entries", "stream=nb_read_packets",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip())
+    except (subprocess.TimeoutExpired, ValueError):
+        pass
+    return None
+
+
+# Default: ~18s/step on M4 Max (FP32, MPS). Updated by benchmark.
+DEFAULT_SEC_PER_STEP = 18.0
+
+
+def estimate_time(video_path, steps):
+    """Estimate inference time. Uses benchmark cache if available, else default."""
+    # Get sec_per_step from cache or default
+    if os.path.isfile(BENCHMARK_CACHE):
+        with open(BENCHMARK_CACHE) as f:
+            cached = json.load(f)
+        sec_per_step = cached["sec_per_step"]
+    else:
+        sec_per_step = DEFAULT_SEC_PER_STEP
+
+    # Get frame count from video
+    num_frames = get_video_frame_count(video_path)
+    if num_frames is None:
+        num_frames = 242  # fallback: ~10s at 25fps
+
     num_batches = (num_frames + 15) // 16  # 16 frames per batch
-    total_sec = cached["sec_per_step"] * num_batches * steps
+    total_sec = sec_per_step * num_batches * steps
     return total_sec
 
 
@@ -243,12 +281,12 @@ def inference(video, audio, output, steps=20, guidance=1.5):
         print("Run with --setup to reinstall.")
         sys.exit(1)
 
-    # Run benchmark on first-ever invocation (caches for future use)
+    # Run benchmark if no cached data (first-ever invocation)
     if not os.path.isfile(BENCHMARK_CACHE):
         benchmark()
 
-    # Show time estimate if we have benchmark data
-    est = estimate_time(num_frames=242, steps=steps)  # TODO: detect actual frame count
+    # Estimate time before starting
+    est = estimate_time(video, steps)
     if est is not None:
         mins = est / 60
         print(f"Estimated time: ~{mins:.0f} min ({steps} steps)")
