@@ -98,23 +98,25 @@ def patch_resnet(repo_dir):
 
 
 def patch_decord_imports(repo_dir):
-    """Replace 'decord' imports with 'eva_decord' throughout the codebase.
-    Idempotent: skips files already using eva_decord."""
+    """eva-decord pip package uses 'decord' as module name — no import patching needed.
+    Undo any previous eva_decord patches (from earlier versions of this script)."""
     count = 0
     for ext in ("*.py",):
         for path in glob.glob(os.path.join(repo_dir, "**", ext), recursive=True):
             with open(path, "r") as f:
                 content = f.read()
-            if "from decord" not in content and "import decord" not in content:
+            if "eva_decord" not in content:
                 continue
-            new_content = content.replace("from decord", "from eva_decord")
-            new_content = new_content.replace("import decord", "import eva_decord as decord")
+            new_content = content.replace("from eva_decord", "from decord")
+            new_content = new_content.replace("import eva_decord as decord", "import decord")
+            new_content = new_content.replace("import eva_decord", "import decord")
             if new_content != content:
                 with open(path, "w") as f:
                     f.write(new_content)
-                print(f"  OK   {path} (decord → eva_decord)")
+                print(f"  OK   {path} (reverted eva_decord → decord)")
                 count += 1
-    print(f"  decord→eva_decord: {count} files patched (0 = already done)")
+    if count:
+        print(f"  reverted {count} files from eva_decord back to decord")
     return count
 
 

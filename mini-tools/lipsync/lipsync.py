@@ -14,10 +14,14 @@ import sys
 BASE_DIR = os.path.expanduser("~/.mini/lipsync")
 REPO_DIR = os.path.join(BASE_DIR, "LatentSync")
 VENV_DIR = os.path.join(BASE_DIR, "venv")
+VENV_PYTHON = os.path.join(VENV_DIR, "bin", "python")
 MARKER = os.path.join(BASE_DIR, ".setup-done")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REQUIREMENTS = os.path.join(SCRIPT_DIR, "requirements-mps.txt")
 PATCH_SCRIPT = os.path.join(SCRIPT_DIR, "patch_mps.py")
+
+# Critical imports that must work after install
+VERIFY_IMPORTS = ["torch", "diffusers", "transformers", "decord", "cv2", "mediapipe"]
 
 
 def run(cmd, **kwargs):
@@ -27,6 +31,45 @@ def run(cmd, **kwargs):
         print(f"  FAILED (exit {result.returncode})")
         sys.exit(1)
     return result
+
+
+def verify_install():
+    """Verify critical packages are importable in the venv."""
+    print("Verifying installation...")
+    failed = []
+    for mod in VERIFY_IMPORTS:
+        result = subprocess.run(
+            [VENV_PYTHON, "-c", f"import {mod}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"  FAIL {mod}")
+            failed.append(mod)
+        else:
+            print(f"  OK   {mod}")
+    if failed:
+        print(f"\nMissing packages: {', '.join(failed)}")
+        print("Attempting individual install...")
+        for mod in failed:
+            # Map module names to pip package names
+            pip_name = {
+                "decord": "eva-decord",
+                "cv2": "opencv-python",
+            }.get(mod, mod)
+            run(f"uv pip install --python {VENV_PYTHON} {pip_name}")
+        # Re-verify
+        still_failed = []
+        for mod in failed:
+            result = subprocess.run(
+                [VENV_PYTHON, "-c", f"import {mod}"],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                still_failed.append(mod)
+        if still_failed:
+            print(f"\nFATAL: Could not install: {', '.join(still_failed)}")
+            sys.exit(1)
+    print("All imports verified.")
 
 
 def setup():
@@ -49,11 +92,14 @@ def setup():
 
     # Install deps
     print("Installing dependencies...")
-    run(f"uv pip install --python {VENV_DIR}/bin/python -r {REQUIREMENTS}")
+    run(f"uv pip install --python {VENV_PYTHON} -r {REQUIREMENTS}")
+
+    # Verify critical imports — retry individually if bulk install missed any
+    verify_install()
 
     # Apply MPS patches
     print("Applying MPS patches...")
-    run(f"{VENV_DIR}/bin/python {PATCH_SCRIPT} {REPO_DIR}")
+    run(f"{VENV_PYTHON} {PATCH_SCRIPT} {REPO_DIR}")
 
     # Download checkpoints
     ckpt_dir = os.path.join(REPO_DIR, "checkpoints")
@@ -66,7 +112,7 @@ def setup():
     else:
         print("Checkpoints already downloaded.")
 
-    # Write marker
+    # Write marker only after everything verified
     with open(MARKER, "w") as f:
         f.write("ok\n")
     print("Setup complete.")
@@ -78,9 +124,8 @@ def inference(video, audio, output, steps=20, guidance=1.5):
         print("First run — running setup...")
         setup()
 
-    python = os.path.join(VENV_DIR, "bin", "python")
-    if not os.path.isfile(python):
-        print(f"Error: venv python not found at {python}")
+    if not os.path.isfile(VENV_PYTHON):
+        print(f"Error: venv python not found at {VENV_PYTHON}")
         print("Run with --setup to reinstall.")
         sys.exit(1)
 
@@ -91,7 +136,7 @@ def inference(video, audio, output, steps=20, guidance=1.5):
     ckpt_path = os.path.join(REPO_DIR, "checkpoints", "latentsync_unet.pt")
 
     cmd = [
-        python, "-m", "scripts.inference",
+        VENV_PYTHON, "-m", "scripts.inference",
         "--unet_config_path", config_path,
         "--inference_ckpt_path", ckpt_path,
         "--video_path", video,
