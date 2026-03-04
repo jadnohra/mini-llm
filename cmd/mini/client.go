@@ -412,3 +412,20 @@ func (s *SSHClient) Push(local, remote string) error {
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
+func (s *SSHClient) Pull(remote, local string) error {
+	source := fmt.Sprintf("%s@%s:%s", s.user, s.host, remote)
+	args := []string{
+		"-o", "ControlMaster=auto",
+		"-o", "ControlPath=/tmp/mini-ssh-%C",
+		"-o", "ControlPersist=10m",
+	}
+	if s.keyFile != "" {
+		args = append(args, "-o", "IdentityFile="+s.keyFile, "-o", "IdentitiesOnly=yes")
+	}
+	args = append(args, source, local)
+	cmd := exec.Command("scp", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}

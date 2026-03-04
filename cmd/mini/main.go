@@ -31,6 +31,7 @@ func main() {
 	root.AddCommand(dictateCmd())
 	root.AddCommand(daemonCmd())
 	root.AddCommand(cueCmd())
+	root.AddCommand(lipsyncCmd())
 
 	err := root.Execute()
 	if err != nil {
