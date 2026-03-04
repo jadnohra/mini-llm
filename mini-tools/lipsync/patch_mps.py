@@ -93,6 +93,14 @@ def patch_resnet(repo_dir):
             '                scale_factor=[1.0, 2.0, 2.0], mode="nearest"\n'
             '            ).to(_orig_dtype)',
         ),
+        (
+            'hidden_states = F.interpolate(hidden_states, size=output_size, mode="nearest")',
+            '_orig_dtype = hidden_states.dtype\n'
+            '            hidden_states = F.interpolate(\n'
+            '                hidden_states.to(torch.float32),\n'
+            '                size=output_size, mode="nearest"\n'
+            '            ).to(_orig_dtype)',
+        ),
     ]
     return patch_file(path, replacements)
 
