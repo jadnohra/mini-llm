@@ -97,6 +97,46 @@ def patch_resnet(repo_dir):
     return patch_file(path, replacements)
 
 
+def patch_face_detector(repo_dir):
+    """Patch face_detector.py: handle MPS device by falling back to CPU for ONNX."""
+    path = os.path.join(repo_dir, "latentsync", "utils", "face_detector.py")
+    replacements = [
+        # cuda_to_int: handle MPS/CPU by returning -1 (CPU)
+        (
+            'def cuda_to_int(cuda_str: str) -> int:\n'
+            '    """\n'
+            '    Convert the string with format "cuda:X" to integer X.\n'
+            '    """\n'
+            '    if cuda_str == "cuda":\n'
+            '        return 0\n'
+            '    device = torch.device(cuda_str)\n'
+            '    if device.type != "cuda":\n'
+            '        raise ValueError(f"Device type must be \'cuda\', got: {device.type}")\n'
+            '    return device.index',
+            'def cuda_to_int(cuda_str) -> int:\n'
+            '    """\n'
+            '    Convert device to integer context ID. MPS/CPU → -1 (CPU).\n'
+            '    """\n'
+            '    if isinstance(cuda_str, torch.device):\n'
+            '        if cuda_str.type == "cuda":\n'
+            '            return cuda_str.index or 0\n'
+            '        return -1  # MPS/CPU → ONNX CPU\n'
+            '    if cuda_str == "cuda":\n'
+            '        return 0\n'
+            '    device = torch.device(cuda_str)\n'
+            '    if device.type != "cuda":\n'
+            '        return -1\n'
+            '    return device.index or 0',
+        ),
+        # FaceAnalysis: use CPUExecutionProvider as fallback
+        (
+            'providers=["CUDAExecutionProvider"]',
+            'providers=["CUDAExecutionProvider", "CPUExecutionProvider"]',
+        ),
+    ]
+    return patch_file(path, replacements)
+
+
 def patch_decord_imports(repo_dir):
     """eva-decord pip package uses 'decord' as module name — no import patching needed.
     Undo any previous eva_decord patches (from earlier versions of this script)."""
@@ -136,6 +176,7 @@ def main():
     ok &= patch_inference(repo_dir)
     ok &= patch_pipeline(repo_dir)
     ok &= patch_resnet(repo_dir)
+    ok &= patch_face_detector(repo_dir)
     patch_decord_imports(repo_dir)
 
     if ok:
