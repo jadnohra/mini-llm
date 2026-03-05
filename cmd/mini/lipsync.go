@@ -17,7 +17,7 @@ func lipsyncCmd() *cobra.Command {
 		steps    int
 		guidance float64
 		duration float64
-		fp32     bool
+		fp16     bool
 		setup    bool
 	)
 
@@ -28,7 +28,7 @@ func lipsyncCmd() *cobra.Command {
 
   mini lipsync --video face.mp4 --audio speech.wav -o output.mp4
   mini lipsync --video face.mp4 --audio speech.wav -o output.mp4 --duration 5
-  mini lipsync --video face.mp4 --audio speech.wav -o output.mp4 --fp32
+  mini lipsync --video face.mp4 --audio speech.wav -o output.mp4 --fp16
   mini lipsync --setup                    # first-time setup only`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ssh := sshClient()
@@ -79,11 +79,11 @@ func lipsyncCmd() *cobra.Command {
 			if duration > 0 {
 				fmt.Println(Row("duration", fmt.Sprintf("%.1fs", duration)))
 			}
-			dtypeLabel := "fp16"
-			if fp32 {
-				dtypeLabel = "fp32"
+			if fp16 {
+				fmt.Println(Row("dtype", "fp16 (forced)"))
+			} else {
+				fmt.Println(Row("dtype", "auto"))
 			}
-			fmt.Println(Row("dtype", dtypeLabel))
 			fmt.Println()
 
 			// Create remote tmp dir
@@ -107,19 +107,18 @@ func lipsyncCmd() *cobra.Command {
 			}
 
 			// Run inference
-			fp16Flag := "--fp16"
-			if fp32 {
-				fp16Flag = "--no-fp16"
+			extraFlags := ""
+			if fp16 {
+				extraFlags += " --fp16"
 			}
-			durationFlag := ""
 			if duration > 0 {
-				durationFlag = fmt.Sprintf(" --duration %.1f", duration)
+				extraFlags += fmt.Sprintf(" --duration %.1f", duration)
 			}
 			inferCmd := fmt.Sprintf(
-				"%s && cd %s && python3 %s --video %s --audio %s --output %s --steps %d --guidance %.1f %s%s",
+				"%s && cd %s && python3 %s --video %s --audio %s --output %s --steps %d --guidance %.1f%s",
 				pathPrefix, lipsyncDir, lipsyncPy,
 				remoteVideo, remoteAudio, remoteOutput,
-				steps, guidance, fp16Flag, durationFlag,
+				steps, guidance, extraFlags,
 			)
 			fmt.Fprintln(os.Stderr, Info.Render("  running inference on Mini..."))
 			if err := ssh.RunInteractive(inferCmd); err != nil {
@@ -160,7 +159,7 @@ func lipsyncCmd() *cobra.Command {
 	cmd.Flags().IntVar(&steps, "steps", 20, "inference steps")
 	cmd.Flags().Float64Var(&guidance, "guidance", 1.5, "guidance scale")
 	cmd.Flags().Float64Var(&duration, "duration", 0, "trim inputs to N seconds (0=no trim)")
-	cmd.Flags().BoolVar(&fp32, "fp32", false, "use FP32 on MPS (slower, safer fallback)")
+	cmd.Flags().BoolVar(&fp16, "fp16", false, "use FP16 on MPS (experimental)")
 	cmd.Flags().BoolVar(&setup, "setup", false, "run setup only (clone + patch + checkpoints)")
 
 	return cmd

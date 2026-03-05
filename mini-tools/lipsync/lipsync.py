@@ -152,17 +152,42 @@ def setup():
     print("Setup complete.")
 
 
-def benchmark(fp16=True):
-    """Run a quick inference to measure per-step speed. Caches result.
+def _run_bench(cmd, cwd, fp16):
+    """Run a single benchmark pass. Returns sec_per_step or None on failure."""
+    bench_env = os.environ.copy()
+    if not fp16:
+        bench_env["MINI_LIPSYNC_FP32"] = "1"
 
-    Uses the built-in demo files but only processes enough to time
-    a few denoising steps. Result is cached to .benchmark.json
-    and reused for all future time estimates.
+    label = "fp16" if fp16 else "fp32"
+    print(f"  Benchmarking {label}...")
+    t0 = time.time()
+    result = subprocess.run(cmd, cwd=cwd, env=bench_env)
+    elapsed = time.time() - t0
+
+    if result.returncode != 0:
+        print(f"  {label} benchmark failed")
+        return None, elapsed
+
+    overhead = 15
+    denoise_time = max(elapsed - overhead, elapsed * 0.8)
+    num_batches = max((50 + 15) // 16, 1)
+    sec_per_step = denoise_time / (num_batches * 2)
+    print(f"  {label}: {sec_per_step:.1f}s/step ({elapsed:.0f}s total)")
+    return sec_per_step, elapsed
+
+
+def benchmark(fp16=None):
+    """Run benchmarks to measure per-step speed. Tests both FP32 and FP16,
+    picks the faster one. Caches result to .benchmark.json.
+
+    If fp16 is explicitly set (True/False), only benchmarks that dtype.
+    If fp16 is None, benchmarks both and picks the winner.
     """
     if os.path.isfile(BENCHMARK_CACHE):
         with open(BENCHMARK_CACHE) as f:
             cached = json.load(f)
-        print(f"Benchmark (cached): {cached['sec_per_step']:.1f}s/step on {cached['device']}")
+        dtype = "fp16" if cached.get("fp16", False) else "fp32"
+        print(f"Benchmark (cached): {cached['sec_per_step']:.1f}s/step on {cached['device']} ({dtype})")
         return cached
 
     # Use built-in demo files
@@ -172,13 +197,15 @@ def benchmark(fp16=True):
         print("Benchmark: demo files not found, skipping.")
         return None
 
-    print("Running benchmark (first-time only, ~1 min)...")
+    if fp16 is None:
+        print("Running benchmark (first-time only, ~2 min — testing FP32 and FP16)...")
+    else:
+        print("Running benchmark (first-time only, ~1 min)...")
     config_path = os.path.join(REPO_DIR, "configs", "unet", "stage2_512.yaml")
     ckpt_path = os.path.join(REPO_DIR, "checkpoints", "latentsync_unet.pt")
     bench_output = os.path.join(BASE_DIR, ".bench_output.mp4")
 
     # Trim demo to ~2 seconds (50 frames = ~3 batches) for a fast benchmark.
-    # Full demo (242 frames) causes memory pressure that skews results.
     bench_video = os.path.join(BASE_DIR, ".bench_input.mp4")
     bench_audio = os.path.join(BASE_DIR, ".bench_input.wav")
     subprocess.run(
@@ -194,7 +221,6 @@ def benchmark(fp16=True):
         print("Benchmark: could not trim demo files, skipping.")
         return None
 
-    # Run 2-step inference on the tiny clip (~3 batches × 2 steps)
     cmd = [
         VENV_PYTHON, "-m", "scripts.inference",
         "--unet_config_path", config_path,
@@ -206,46 +232,55 @@ def benchmark(fp16=True):
         "--guidance_scale", "1.0",
     ]
 
-    bench_env = os.environ.copy()
-    if not fp16:
-        bench_env["MINI_LIPSYNC_FP32"] = "1"
+    # Benchmark the requested dtype(s)
+    if fp16 is not None:
+        # User forced a specific dtype
+        best_sps, elapsed = _run_bench(cmd, REPO_DIR, fp16)
+        best_fp16 = fp16
+    else:
+        # Test both, pick winner
+        sps_fp32, elapsed_fp32 = _run_bench(cmd, REPO_DIR, fp16=False)
+        sps_fp16, elapsed_fp16 = _run_bench(cmd, REPO_DIR, fp16=True)
 
-    t0 = time.time()
-    result = subprocess.run(cmd, cwd=REPO_DIR, env=bench_env)
-    elapsed = time.time() - t0
+        if sps_fp32 is not None and sps_fp16 is not None:
+            if sps_fp16 < sps_fp32:
+                best_sps, best_fp16, elapsed = sps_fp16, True, elapsed_fp16
+                print(f"  Winner: fp16 ({sps_fp16:.1f}s/step vs fp32 {sps_fp32:.1f}s/step)")
+            else:
+                best_sps, best_fp16, elapsed = sps_fp32, False, elapsed_fp32
+                print(f"  Winner: fp32 ({sps_fp32:.1f}s/step vs fp16 {sps_fp16:.1f}s/step)")
+        elif sps_fp32 is not None:
+            best_sps, best_fp16, elapsed = sps_fp32, False, elapsed_fp32
+            print(f"  FP16 failed, using fp32 ({sps_fp32:.1f}s/step)")
+        elif sps_fp16 is not None:
+            best_sps, best_fp16, elapsed = sps_fp16, True, elapsed_fp16
+            print(f"  FP32 failed, using fp16 ({sps_fp16:.1f}s/step)")
+        else:
+            best_sps = None
 
     # Clean up benchmark files
     for f in [bench_video, bench_audio, bench_output]:
         if os.path.isfile(f):
             os.unlink(f)
 
-    if result.returncode != 0:
-        print(f"Benchmark failed (exit {result.returncode})")
+    if best_sps is None:
+        print("Benchmark failed")
         return None
 
-    # ~2s at 25fps = ~50 frames = ceil(50/16) = 4 batches, 2 steps each
-    # Subtract overhead (face detection, affine, restore, ffmpeg ~15s)
-    overhead = 15
-    denoise_time = max(elapsed - overhead, elapsed * 0.8)
-    num_batches = max((50 + 15) // 16, 1)
-    bench_steps = 2
-    sec_per_step = denoise_time / (num_batches * bench_steps)
-
-    device = "mps"
-
     cached = {
-        "sec_per_step": round(sec_per_step, 2),
-        "device": device,
+        "sec_per_step": round(best_sps, 2),
+        "device": "mps",
         "total_bench_sec": round(elapsed, 1),
-        "bench_frames": 242,
-        "bench_steps": bench_steps,
-        "fp16": fp16,
+        "bench_frames": 50,
+        "bench_steps": 2,
+        "fp16": best_fp16,
     }
 
     with open(BENCHMARK_CACHE, "w") as f:
         json.dump(cached, f, indent=2)
 
-    print(f"Benchmark: {sec_per_step:.1f}s/step on {device} ({elapsed:.0f}s total)")
+    dtype = "fp16" if best_fp16 else "fp32"
+    print(f"Benchmark: {best_sps:.1f}s/step on mps ({dtype})")
     return cached
 
 
@@ -289,6 +324,16 @@ def estimate_time(video_path, steps):
     return total_sec
 
 
+def _fmt_time(seconds):
+    """Format seconds as human-readable time string."""
+    if seconds < 120:
+        return f"{seconds:.0f}s"
+    mins = seconds / 60
+    if mins < 60:
+        return f"{mins:.0f} min"
+    return f"{mins / 60:.1f}h"
+
+
 def trim_media(input_path, output_path, duration):
     """Trim video or audio to duration seconds using ffmpeg."""
     cmd = ["ffmpeg", "-y", "-i", input_path, "-t", str(duration), "-c", "copy", output_path]
@@ -299,8 +344,12 @@ def trim_media(input_path, output_path, duration):
     return True
 
 
-def inference(video, audio, output, steps=20, guidance=1.5, duration=0, fp16=True):
-    """Run LatentSync inference with MPS."""
+def inference(video, audio, output, steps=20, guidance=1.5, duration=0, fp16=None):
+    """Run LatentSync inference with MPS.
+
+    fp16=None means auto-detect (benchmark both, pick faster).
+    fp16=True/False forces that dtype.
+    """
     ensure_brew_path()
 
     if not os.path.isfile(MARKER):
@@ -312,8 +361,8 @@ def inference(video, audio, output, steps=20, guidance=1.5, duration=0, fp16=Tru
         print("Run with --setup to reinstall.")
         sys.exit(1)
 
-    # Invalidate benchmark cache if dtype changed
-    if os.path.isfile(BENCHMARK_CACHE):
+    # If user forced a dtype and it differs from cache, invalidate
+    if fp16 is not None and os.path.isfile(BENCHMARK_CACHE):
         with open(BENCHMARK_CACHE) as f:
             cached = json.load(f)
         if cached.get("fp16", False) != fp16:
@@ -322,7 +371,24 @@ def inference(video, audio, output, steps=20, guidance=1.5, duration=0, fp16=Tru
 
     # Run benchmark if no cached data (first-ever invocation)
     if not os.path.isfile(BENCHMARK_CACHE):
-        benchmark(fp16=fp16)
+        bench_result = benchmark(fp16=fp16)
+    else:
+        with open(BENCHMARK_CACHE) as f:
+            bench_result = json.load(f)
+
+    # Use benchmark-determined dtype if user didn't force one
+    if fp16 is None and bench_result:
+        fp16 = bench_result.get("fp16", False)
+    elif fp16 is None:
+        fp16 = False  # safe default if no benchmark
+
+    # Show full-video estimate before trimming
+    if duration > 0:
+        full_est = estimate_time(video, steps)
+        full_frames = get_video_frame_count(video)
+        if full_est is not None:
+            full_batches = ((full_frames or 242) + 15) // 16
+            print(f"Full video: {full_frames or '?'} frames, {full_batches} batches → ~{_fmt_time(full_est)}")
 
     # Trim inputs if --duration specified
     trimmed_files = []
@@ -338,20 +404,13 @@ def inference(video, audio, output, steps=20, guidance=1.5, duration=0, fp16=Tru
             audio = trimmed_audio
             trimmed_files.append(trimmed_audio)
 
-    # Estimate time before starting
+    # Estimate time for actual inference (trimmed if applicable)
     num_frames = get_video_frame_count(video)
     est = estimate_time(video, steps)
     if est is not None:
         num_batches = ((num_frames or 242) + 15) // 16
-        if est < 120:
-            print(f"Estimated time: ~{est:.0f}s ({num_batches} batches × {steps} steps)")
-        else:
-            mins = est / 60
-            hrs = mins / 60
-            if hrs >= 1:
-                print(f"Estimated time: ~{hrs:.1f}h ({num_batches} batches × {steps} steps)")
-            else:
-                print(f"Estimated time: ~{mins:.0f} min ({num_batches} batches × {steps} steps)")
+        label = f"Estimated time ({duration}s clip)" if duration > 0 else "Estimated time"
+        print(f"{label}: ~{_fmt_time(est)} ({num_batches} batches × {steps} steps)")
 
     env = os.environ.copy()
     # MPS fallback removed — all LatentSync ops work natively on MPS (verified by diagnose_mps.py).
@@ -416,8 +475,8 @@ def main():
     parser.add_argument("--steps", type=int, default=20, help="Inference steps")
     parser.add_argument("--guidance", type=float, default=1.5, help="Guidance scale")
     parser.add_argument("--duration", type=float, default=0, help="Trim inputs to N seconds (0=no trim)")
-    parser.add_argument("--fp16", action="store_true", default=True, help="Use FP16 on MPS (default)")
-    parser.add_argument("--no-fp16", dest="fp16", action="store_false", help="Use FP32 on MPS (slower, safer)")
+    parser.add_argument("--fp16", action="store_true", default=None, help="Force FP16 on MPS")
+    parser.add_argument("--no-fp16", dest="fp16", action="store_false", help="Force FP32 on MPS")
     args = parser.parse_args()
 
     if args.setup:
@@ -436,14 +495,14 @@ def main():
         # Delete cache to force re-run
         if os.path.isfile(BENCHMARK_CACHE):
             os.unlink(BENCHMARK_CACHE)
-        benchmark(fp16=args.fp16)
+        benchmark(fp16=args.fp16)  # None = test both
         return
 
     if not args.video or not args.audio or not args.output:
         parser.error("--video, --audio, and --output are required for inference")
 
     inference(args.video, args.audio, args.output, args.steps, args.guidance,
-              duration=args.duration, fp16=args.fp16)
+              duration=args.duration, fp16=args.fp16)  # None = auto-detect
 
 
 if __name__ == "__main__":
