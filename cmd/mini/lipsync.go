@@ -16,6 +16,8 @@ func lipsyncCmd() *cobra.Command {
 		output   string
 		steps    int
 		guidance float64
+		duration float64
+		fp32     bool
 		setup    bool
 	)
 
@@ -25,8 +27,9 @@ func lipsyncCmd() *cobra.Command {
 		Long: `Generate a lip-synced video using LatentSync on the Mac Mini (MPS).
 
   mini lipsync --video face.mp4 --audio speech.wav -o output.mp4
-  mini lipsync --setup                    # first-time setup only
-  mini lipsync --video face.mp4 --audio speech.wav -o output.mp4 --steps 30`,
+  mini lipsync --video face.mp4 --audio speech.wav -o output.mp4 --duration 5
+  mini lipsync --video face.mp4 --audio speech.wav -o output.mp4 --fp32
+  mini lipsync --setup                    # first-time setup only`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ssh := sshClient()
 			repoDir := "~/mini-llm"
@@ -73,6 +76,14 @@ func lipsyncCmd() *cobra.Command {
 			fmt.Println(Row("output", output))
 			fmt.Println(Row("steps", fmt.Sprintf("%d", steps)))
 			fmt.Println(Row("guidance", fmt.Sprintf("%.1f", guidance)))
+			if duration > 0 {
+				fmt.Println(Row("duration", fmt.Sprintf("%.1fs", duration)))
+			}
+			dtypeLabel := "fp16"
+			if fp32 {
+				dtypeLabel = "fp32"
+			}
+			fmt.Println(Row("dtype", dtypeLabel))
 			fmt.Println()
 
 			// Create remote tmp dir
@@ -96,11 +107,19 @@ func lipsyncCmd() *cobra.Command {
 			}
 
 			// Run inference
+			fp16Flag := "--fp16"
+			if fp32 {
+				fp16Flag = "--no-fp16"
+			}
+			durationFlag := ""
+			if duration > 0 {
+				durationFlag = fmt.Sprintf(" --duration %.1f", duration)
+			}
 			inferCmd := fmt.Sprintf(
-				"%s && cd %s && python3 %s --video %s --audio %s --output %s --steps %d --guidance %.1f",
+				"%s && cd %s && python3 %s --video %s --audio %s --output %s --steps %d --guidance %.1f %s%s",
 				pathPrefix, lipsyncDir, lipsyncPy,
 				remoteVideo, remoteAudio, remoteOutput,
-				steps, guidance,
+				steps, guidance, fp16Flag, durationFlag,
 			)
 			fmt.Fprintln(os.Stderr, Info.Render("  running inference on Mini..."))
 			if err := ssh.RunInteractive(inferCmd); err != nil {
@@ -140,6 +159,8 @@ func lipsyncCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output video path (required)")
 	cmd.Flags().IntVar(&steps, "steps", 20, "inference steps")
 	cmd.Flags().Float64Var(&guidance, "guidance", 1.5, "guidance scale")
+	cmd.Flags().Float64Var(&duration, "duration", 0, "trim inputs to N seconds (0=no trim)")
+	cmd.Flags().BoolVar(&fp32, "fp32", false, "use FP32 on MPS (slower, safer fallback)")
 	cmd.Flags().BoolVar(&setup, "setup", false, "run setup only (clone + patch + checkpoints)")
 
 	return cmd

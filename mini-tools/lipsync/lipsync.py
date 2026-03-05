@@ -152,7 +152,7 @@ def setup():
     print("Setup complete.")
 
 
-def benchmark():
+def benchmark(fp16=True):
     """Run a quick inference to measure per-step speed. Caches result.
 
     Uses the built-in demo files but only processes enough to time
@@ -206,8 +206,12 @@ def benchmark():
         "--guidance_scale", "1.0",
     ]
 
+    bench_env = os.environ.copy()
+    if not fp16:
+        bench_env["MINI_LIPSYNC_FP32"] = "1"
+
     t0 = time.time()
-    result = subprocess.run(cmd, cwd=REPO_DIR)
+    result = subprocess.run(cmd, cwd=REPO_DIR, env=bench_env)
     elapsed = time.time() - t0
 
     # Clean up benchmark files
@@ -235,6 +239,7 @@ def benchmark():
         "total_bench_sec": round(elapsed, 1),
         "bench_frames": 242,
         "bench_steps": bench_steps,
+        "fp16": fp16,
     }
 
     with open(BENCHMARK_CACHE, "w") as f:
@@ -284,7 +289,17 @@ def estimate_time(video_path, steps):
     return total_sec
 
 
-def inference(video, audio, output, steps=20, guidance=1.5):
+def trim_media(input_path, output_path, duration):
+    """Trim video or audio to duration seconds using ffmpeg."""
+    cmd = ["ffmpeg", "-y", "-i", input_path, "-t", str(duration), "-c", "copy", output_path]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  Failed to trim {input_path}: {result.stderr[:200]}")
+        return False
+    return True
+
+
+def inference(video, audio, output, steps=20, guidance=1.5, duration=0, fp16=True):
     """Run LatentSync inference with MPS."""
     ensure_brew_path()
 
@@ -297,9 +312,31 @@ def inference(video, audio, output, steps=20, guidance=1.5):
         print("Run with --setup to reinstall.")
         sys.exit(1)
 
+    # Invalidate benchmark cache if dtype changed
+    if os.path.isfile(BENCHMARK_CACHE):
+        with open(BENCHMARK_CACHE) as f:
+            cached = json.load(f)
+        if cached.get("fp16", False) != fp16:
+            print("Benchmark outdated (dtype changed), will re-run...")
+            os.unlink(BENCHMARK_CACHE)
+
     # Run benchmark if no cached data (first-ever invocation)
     if not os.path.isfile(BENCHMARK_CACHE):
-        benchmark()
+        benchmark(fp16=fp16)
+
+    # Trim inputs if --duration specified
+    trimmed_files = []
+    if duration > 0:
+        trim_dir = os.path.dirname(output) or "."
+        trimmed_video = os.path.join(trim_dir, ".trimmed_video.mp4")
+        trimmed_audio = os.path.join(trim_dir, ".trimmed_audio" + os.path.splitext(audio)[1])
+        print(f"Trimming inputs to {duration}s...")
+        if trim_media(video, trimmed_video, duration):
+            video = trimmed_video
+            trimmed_files.append(trimmed_video)
+        if trim_media(audio, trimmed_audio, duration):
+            audio = trimmed_audio
+            trimmed_files.append(trimmed_audio)
 
     # Estimate time before starting
     num_frames = get_video_frame_count(video)
@@ -319,7 +356,10 @@ def inference(video, audio, output, steps=20, guidance=1.5):
     env = os.environ.copy()
     # MPS fallback removed — all LatentSync ops work natively on MPS (verified by diagnose_mps.py).
     # The blanket fallback silently routes ALL ops to CPU, defeating GPU usage entirely.
+    if not fp16:
+        env["MINI_LIPSYNC_FP32"] = "1"
 
+    dtype_label = "fp16" if fp16 else "fp32"
     config_path = os.path.join(REPO_DIR, "configs", "unet", "stage2_512.yaml")
     ckpt_path = os.path.join(REPO_DIR, "checkpoints", "latentsync_unet.pt")
 
@@ -334,16 +374,24 @@ def inference(video, audio, output, steps=20, guidance=1.5):
         "--guidance_scale", str(guidance),
     ]
 
-    print(f"Running inference...")
+    print(f"Running inference ({dtype_label})...")
     print(f"  video:    {video}")
     print(f"  audio:    {audio}")
     print(f"  output:   {output}")
     print(f"  steps:    {steps}")
     print(f"  guidance: {guidance}")
+    print(f"  dtype:    {dtype_label}")
+    if duration > 0:
+        print(f"  duration: {duration}s")
 
     t0 = time.time()
     result = subprocess.run(cmd, cwd=REPO_DIR, env=env)
     elapsed = time.time() - t0
+
+    # Clean up trimmed files
+    for f in trimmed_files:
+        if os.path.isfile(f):
+            os.unlink(f)
 
     if result.returncode != 0:
         print(f"Inference failed (exit {result.returncode})")
@@ -367,6 +415,9 @@ def main():
     parser.add_argument("--output", "-o", help="Output video path")
     parser.add_argument("--steps", type=int, default=20, help="Inference steps")
     parser.add_argument("--guidance", type=float, default=1.5, help="Guidance scale")
+    parser.add_argument("--duration", type=float, default=0, help="Trim inputs to N seconds (0=no trim)")
+    parser.add_argument("--fp16", action="store_true", default=True, help="Use FP16 on MPS (default)")
+    parser.add_argument("--no-fp16", dest="fp16", action="store_false", help="Use FP32 on MPS (slower, safer)")
     args = parser.parse_args()
 
     if args.setup:
@@ -385,13 +436,14 @@ def main():
         # Delete cache to force re-run
         if os.path.isfile(BENCHMARK_CACHE):
             os.unlink(BENCHMARK_CACHE)
-        benchmark()
+        benchmark(fp16=args.fp16)
         return
 
     if not args.video or not args.audio or not args.output:
         parser.error("--video, --audio, and --output are required for inference")
 
-    inference(args.video, args.audio, args.output, args.steps, args.guidance)
+    inference(args.video, args.audio, args.output, args.steps, args.guidance,
+              duration=args.duration, fp16=args.fp16)
 
 
 if __name__ == "__main__":

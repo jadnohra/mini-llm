@@ -33,16 +33,16 @@ def patch_file(path, replacements):
 
 
 def patch_inference(repo_dir):
-    """Patch scripts/inference.py for MPS device detection + FP32."""
+    """Patch scripts/inference.py for MPS device detection + FP16."""
     path = os.path.join(repo_dir, "scripts", "inference.py")
     replacements = [
-        # Device detection: CUDA-only → MPS/CUDA/CPU
+        # Device detection: CUDA-only → MPS/CUDA/CPU (fresh repo)
         (
             'is_fp16_supported = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] > 7\n'
             '    dtype = torch.float16 if is_fp16_supported else torch.float32',
             'if torch.backends.mps.is_available():\n'
             '        device = torch.device("mps")\n'
-            '        weight_dtype = torch.float32\n'
+            '        weight_dtype = torch.float16 if os.environ.get("MINI_LIPSYNC_FP32") != "1" else torch.float32\n'
             '    elif torch.cuda.is_available():\n'
             '        device = torch.device("cuda")\n'
             '        weight_dtype = torch.float16 if torch.cuda.get_device_capability()[0] > 7 else torch.float32\n'
@@ -50,6 +50,13 @@ def patch_inference(repo_dir):
             '        device = torch.device("cpu")\n'
             '        weight_dtype = torch.float32\n'
             '    dtype = weight_dtype',
+        ),
+        # Upgrade: already-patched FP32 → FP16 on MPS
+        (
+            '        device = torch.device("mps")\n'
+            '        weight_dtype = torch.float32\n',
+            '        device = torch.device("mps")\n'
+            '        weight_dtype = torch.float16 if os.environ.get("MINI_LIPSYNC_FP32") != "1" else torch.float32\n',
         ),
         # Audio encoder device: hardcoded "cuda" → variable
         (
